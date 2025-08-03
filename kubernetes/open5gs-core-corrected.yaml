@@ -1,0 +1,552 @@
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: open5gs-mongodb
+  namespace: "open5gs"
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: open5gs-amf
+  namespace: "open5gs"
+data:
+  amf.yaml: |
+    logger: { level: info }
+    global: {}
+    amf:
+      sbi:
+        server: [{ dev: eth0, port: 7777 }]
+        client:
+          scp: [{ uri: http://open5gs-scp-sbi:7777 }]
+      ngap:
+        server: [{ dev: eth0 }]
+      guami:
+        - amf_id: { region: 2, set: 1 }
+          plmn_id: { mcc: "208", mnc: "93" }
+      tai:
+        - plmn_id: { mcc: "208", mnc: "93" }
+          tac: [1]
+      plmn_support:
+        - plmn_id: { mcc: "208", mnc: "93" }
+          s_nssai:
+            - sst: 1
+              sd: "000001"
+      security:
+        integrity_order: [NIA2, NIA1, NIA0]
+        ciphering_order: [NEA0, NEA1, NEA2]
+      network_name: { full: Open5GS }
+      amf_name: open5gs-amf
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: open5gs-ausf
+  namespace: "open5gs"
+data:
+  ausf.yaml: |
+    logger: { level: info }
+    global: {}
+    ausf:
+      sbi:
+        server: [{ dev: eth0, port: 7777 }]
+        client:
+          scp: [{ uri: http://open5gs-scp-sbi:7777 }]
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: open5gs-bsf
+  namespace: "open5gs"
+data:
+  bsf.yaml: |
+    logger: { level: info }
+    global: {}
+    bsf:
+      sbi:
+        server: [{ dev: eth0, port: 7777 }]
+        client:
+          scp: [{ uri: http://open5gs-scp-sbi:7777 }]
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: open5gs-nrf
+  namespace: "open5gs"
+data:
+  nrf.yaml: |
+    logger: { level: info }
+    global: {}
+    nrf:
+      sbi:
+        server: [{ dev: eth0, port: 7777 }]
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: open5gs-nssf
+  namespace: "open5gs"
+data:
+  nssf.yaml: |
+    logger: { level: info }
+    global: {}
+    nssf:
+      sbi:
+        server: [{ dev: eth0, port: 7777 }]
+        client:
+          scp: [{ uri: http://open5gs-scp-sbi:7777 }]
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: open5gs-pcf
+  namespace: "open5gs"
+data:
+  pcf.yaml: |
+    logger: { level: info }
+    global: {}
+    pcf:
+      sbi:
+        server: [{ dev: eth0, port: 7777 }]
+        client:
+          scp: [{ uri: http://open5gs-scp-sbi:7777 }]
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: open5gs-scp
+  namespace: "open5gs"
+data:
+  scp.yaml: |
+    logger: { level: info }
+    global: {}
+    scp:
+      sbi:
+        server: [{ dev: eth0, port: 7777 }]
+        client:
+          nrf: [{ uri: http://open5gs-nrf-sbi:7777 }]
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: open5gs-smf
+  namespace: "open5gs"
+data:
+  smf.yaml: |
+    logger: { level: info }
+    global: {}
+    smf:
+      sbi:
+        server: [{ dev: eth0, port: 7777 }]
+        client:
+          scp: [{ uri: http://open5gs-scp-sbi:7777 }]
+      pfcp:
+        server: [{ dev: eth0 }]
+        client:
+          upf:
+            - addr: open5gs-upf-pfcp
+              dnn: internet
+            - addr: open5gs-mec-upf-upf-pfcp
+              dnn: edge-video
+      gtpc:
+        server: [{ dev: eth0 }]
+      session:
+        - dnn: internet
+          subnet: 10.45.0.0/16
+        - dnn: edge-video
+          subnet: 10.46.0.0/16
+      dns: [ "8.8.8.8", "8.8.4.4" ]
+      mtu: 1400
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: open5gs-udm
+  namespace: "open5gs"
+data:
+  udm.yaml: |
+    logger: { level: info }
+    global: {}
+    udm:
+      sbi:
+        server: [{ dev: eth0, port: 7777 }]
+        client:
+          scp: [{ uri: http://open5gs-scp-sbi:7777 }]
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: open5gs-udr
+  namespace: "open5gs"
+data:
+  udr.yaml: |
+    logger: { level: info }
+    global: {}
+    udr:
+      sbi:
+        server: [{ dev: eth0, port: 7777 }]
+        client:
+          scp: [{ uri: http://open5gs-scp-sbi:7777 }]
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: open5gs-upf
+  namespace: "open5gs"
+data:
+  upf.yaml: |
+    logger: { level: info }
+    global: {}
+    upf:
+      pfcp: { server: [{ dev: eth0 }] }
+      gtpu: { server: [{ dev: eth0 }] }
+      session:
+        - { dev: ogstun, dnn: internet }
+        - { dev: ogstun2, dnn: edge-video }
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: open5gs-upf-entrypoint
+  namespace: "open5gs"
+data:
+  k8s-entrypoint.sh: |
+    #!/bin/bash
+    set -e
+    ip tuntap add name ogstun mode tun
+    ip addr add 10.45.0.1/16 dev ogstun
+    ip link set ogstun up
+    iptables -t nat -A POSTROUTING -s 10.45.0.0/16 ! -o ogstun -j MASQUERADE
+    ip tuntap add name ogstun2 mode tun
+    ip addr add 10.46.0.1/16 dev ogstun2
+    ip link set ogstun2 up
+    iptables -t nat -A POSTROUTING -s 10.46.0.0/16 ! -o ogstun2 -j MASQUERADE
+    sysctl -w net.ipv4.ip_forward=1
+    exec "$@"
+---
+kind: PersistentVolumeClaim
+apiVersion: v1
+metadata:
+  name: open5gs-mongodb
+  namespace: "open5gs"
+spec:
+  accessModes: ["ReadWriteOnce"]
+  storageClassName: "local-path"
+  resources: { requests: { storage: "2Gi" } }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: open5gs-amf-ngap
+  namespace: "open5gs"
+spec:
+  type: ClusterIP
+  ports:
+  - name: ngap
+    port: 38412
+    targetPort: ngap
+    protocol: SCTP
+  selector:
+    app.kubernetes.io/name: amf
+---
+# Aggiungi qui tutti gli altri servizi (amf-sbi, ausf-sbi, ecc.)
+# Per brevità, li raggruppo - copia questo blocco intero
+apiVersion: v1
+kind: Service
+metadata: { name: open5gs-amf-sbi, namespace: "open5gs" }
+spec: { type: ClusterIP, ports: [{ name: sbi, port: 7777, targetPort: sbi }], selector: { app.kubernetes.io/name: amf } }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: open5gs-ausf-sbi, namespace: "open5gs" }
+spec: { type: ClusterIP, ports: [{ name: sbi, port: 7777, targetPort: sbi }], selector: { app.kubernetes.io/name: ausf } }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: open5gs-bsf-sbi, namespace: "open5gs" }
+spec: { type: ClusterIP, ports: [{ name: sbi, port: 7777, targetPort: sbi }], selector: { app.kubernetes.io/name: bsf } }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: open5gs-mongodb, namespace: "open5gs" }
+spec: { type: ClusterIP, ports: [{ name: "mongodb", port: 27017, targetPort: mongodb }], selector: { app.kubernetes.io/name: mongodb } }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: open5gs-nrf-sbi, namespace: "open5gs" }
+spec: { type: ClusterIP, ports: [{ name: sbi, port: 7777, targetPort: sbi }], selector: { app.kubernetes.io/name: nrf } }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: open5gs-nssf-sbi, namespace: "open5gs" }
+spec: { type: ClusterIP, ports: [{ name: sbi, port: 7777, targetPort: sbi }], selector: { app.kubernetes.io/name: nssf } }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: open5gs-pcf-sbi, namespace: "open5gs" }
+spec: { type: ClusterIP, ports: [{ name: sbi, port: 7777, targetPort: sbi }], selector: { app.kubernetes.io/name: pcf } }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: open5gs-scp-sbi, namespace: "open5gs" }
+spec: { type: ClusterIP, ports: [{ name: sbi, port: 7777, targetPort: sbi }], selector: { app.kubernetes.io/name: scp } }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: open5gs-smf-sbi, namespace: "open5gs" }
+spec: { type: ClusterIP, ports: [{ name: sbi, port: 7777, targetPort: sbi }], selector: { app.kubernetes.io/name: smf } }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: open5gs-smf-pfcp, namespace: "open5gs" }
+spec: { type: ClusterIP, ports: [{ name: pfcp, port: 8805, protocol: UDP, targetPort: pfcp }], selector: { app.kubernetes.io/name: smf } }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: open5gs-udm-sbi, namespace: "open5gs" }
+spec: { type: ClusterIP, ports: [{ name: sbi, port: 7777, targetPort: sbi }], selector: { app.kubernetes.io/name: udm } }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: open5gs-udr-sbi, namespace: "open5gs" }
+spec: { type: ClusterIP, ports: [{ name: sbi, port: 7777, targetPort: sbi }], selector: { app.kubernetes.io/name: udr } }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: open5gs-upf-pfcp, namespace: "open5gs" }
+spec: { type: ClusterIP, ports: [{ name: pfcp, port: 8805, protocol: UDP, targetPort: pfcp }], selector: { app.kubernetes.io/name: upf } }
+---
+# DEPLOYMENTS
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: open5gs-mongodb, namespace: "open5gs" }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app.kubernetes.io/name: mongodb } }
+  template:
+    metadata: { labels: { app.kubernetes.io/name: mongodb } }
+    spec:
+      serviceAccountName: open5gs-mongodb
+      containers:
+      - name: mongodb
+        image: docker.io/bitnami/mongodb:5.0.10-debian-11-r3
+        imagePullPolicy: "IfNotPresent"
+        env: [{ name: ALLOW_EMPTY_PASSWORD, value: "yes" }]
+        ports: [{ name: mongodb, containerPort: 27017 }]
+        volumeMounts: [{ name: datadir, mountPath: /bitnami/mongodb }]
+      volumes: [{ name: datadir, persistentVolumeClaim: { claimName: open5gs-mongodb } }]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: open5gs-nrf, namespace: "open5gs" }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app.kubernetes.io/name: nrf } }
+  template:
+    metadata: { labels: { app.kubernetes.io/name: nrf } }
+    spec:
+      containers:
+      - name: open5gs-nrf
+        image: docker.io/gradiant/open5gs:2.7.5
+        args: ["open5gs-nrfd"]
+        volumeMounts: [{ name: config, mountPath: /opt/open5gs/etc/open5gs/nrf.yaml, subPath: "nrf.yaml" }]
+      volumes: [{ name: config, configMap: { name: open5gs-nrf } }]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: open5gs-scp, namespace: "open5gs" }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app.kubernetes.io/name: scp } }
+  template:
+    metadata: { labels: { app.kubernetes.io/name: scp } }
+    spec:
+      containers:
+      - name: open5gs-scp
+        image: docker.io/gradiant/open5gs:2.7.5
+        args: ["open5gs-scpd"]
+        volumeMounts: [{ name: config, mountPath: /opt/open5gs/etc/open5gs/scp.yaml, subPath: "scp.yaml" }]
+      volumes: [{ name: config, configMap: { name: open5gs-scp } }]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: open5gs-amf, namespace: "open5gs" }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app.kubernetes.io/name: amf } }
+  template:
+    metadata: { labels: { app.kubernetes.io/name: amf } }
+    spec:
+      containers:
+      - name: open5gs-amf
+        image: docker.io/gradiant/open5gs:2.7.5
+        args: ["open5gs-amfd"]
+        volumeMounts: [{ name: config, mountPath: /opt/open5gs/etc/open5gs/amf.yaml, subPath: "amf.yaml" }]
+      volumes: [{ name: config, configMap: { name: open5gs-amf } }]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: open5gs-ausf, namespace: "open5gs" }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app.kubernetes.io/name: ausf } }
+  template:
+    metadata: { labels: { app.kubernetes.io/name: ausf } }
+    spec:
+      containers:
+      - name: open5gs-ausf
+        image: docker.io/gradiant/open5gs:2.7.5
+        args: ["open5gs-ausfd", "--db_uri", "mongodb://open5gs-mongodb/open5gs"]
+        volumeMounts: [{ name: config, mountPath: /opt/open5gs/etc/open5gs/ausf.yaml, subPath: "ausf.yaml" }]
+      volumes: [{ name: config, configMap: { name: open5gs-ausf } }]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: open5gs-bsf, namespace: "open5gs" }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app.kubernetes.io/name: bsf } }
+  template:
+    metadata: { labels: { app.kubernetes.io/name: bsf } }
+    spec:
+      containers:
+      - name: open5gs-bsf
+        image: docker.io/gradiant/open5gs:2.7.5
+        args: ["open5gs-bsfd"]
+        volumeMounts: [{ name: config, mountPath: /opt/open5gs/etc/open5gs/bsf.yaml, subPath: "bsf.yaml" }]
+      volumes: [{ name: config, configMap: { name: open5gs-bsf } }]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: open5gs-nssf, namespace: "open5gs" }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app.kubernetes.io/name: nssf } }
+  template:
+    metadata: { labels: { app.kubernetes.io/name: nssf } }
+    spec:
+      containers:
+      - name: open5gs-nssf
+        image: docker.io/gradiant/open5gs:2.7.5
+        args: ["open5gs-nssfd"]
+        volumeMounts: [{ name: config, mountPath: /opt/open5gs/etc/open5gs/nssf.yaml, subPath: "nssf.yaml" }]
+      volumes: [{ name: config, configMap: { name: open5gs-nssf } }]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: open5gs-pcf, namespace: "open5gs" }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app.kubernetes.io/name: pcf } }
+  template:
+    metadata: { labels: { app.kubernetes.io/name: pcf } }
+    spec:
+      containers:
+      - name: open5gs-pcf
+        image: docker.io/gradiant/open5gs:2.7.5
+        args: ["open5gs-pcfd", "--db_uri", "mongodb://open5gs-mongodb/open5gs"]
+        volumeMounts: [{ name: config, mountPath: /opt/open5gs/etc/open5gs/pcf.yaml, subPath: "pcf.yaml" }]
+      volumes: [{ name: config, configMap: { name: open5gs-pcf } }]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: open5gs-smf, namespace: "open5gs" }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app.kubernetes.io/name: smf } }
+  template:
+    metadata: { labels: { app.kubernetes.io/name: smf } }
+    spec:
+      containers:
+      - name: open5gs-smf
+        image: docker.io/gradiant/open5gs:2.7.5
+        args: ["open5gs-smfd"]
+        volumeMounts: [{ name: config, mountPath: /opt/open5gs/etc/open5gs/smf.yaml, subPath: "smf.yaml" }]
+      volumes: [{ name: config, configMap: { name: open5gs-smf } }]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: open5gs-udm, namespace: "open5gs" }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app.kubernetes.io/name: udm } }
+  template:
+    metadata: { labels: { app.kubernetes.io/name: udm } }
+    spec:
+      containers:
+      - name: open5gs-udm
+        image: docker.io/gradiant/open5gs:2.7.5
+        args: ["open5gs-udmd"]
+        volumeMounts: [{ name: config, mountPath: /opt/open5gs/etc/open5gs/udm.yaml, subPath: "udm.yaml" }]
+      volumes: [{ name: config, configMap: { name: open5gs-udm } }]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: open5gs-udr, namespace: "open5gs" }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app.kubernetes.io/name: udr } }
+  template:
+    metadata: { labels: { app.kubernetes.io/name: udr } }
+    spec:
+      containers:
+      - name: open5gs-udr
+        image: docker.io/gradiant/open5gs:2.7.5
+        args: ["open5gs-udrd", "--db_uri", "mongodb://open5gs-mongodb/open5gs"]
+        volumeMounts: [{ name: config, mountPath: /opt/open5gs/etc/open5gs/udr.yaml, subPath: "udr.yaml" }]
+      volumes: [{ name: config, configMap: { name: open5gs-udr } }]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: open5gs-upf, namespace: "open5gs" }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app.kubernetes.io/name: upf } }
+  template:
+    metadata: { labels: { app.kubernetes.io/name: upf } }
+    spec:
+      initContainers:
+      - name: tun-create
+        image: docker.io/gradiant/open5gs:2.7.5
+        command: ["/bin/bash", "-c", "/k8s-entrypoint.sh"]
+        securityContext: { privileged: true, runAsUser: 0, capabilities: { add: ["NET_ADMIN"] } }
+        volumeMounts: [{ name: entrypoint, mountPath: /k8s-entrypoint.sh, subPath: k8s-entrypoint.sh }]
+      containers:
+      - name: open5gs-upf
+        image: docker.io/gradiant/open5gs:2.7.5
+        command: ["open5gs-upfd"]
+        securityContext: { privileged: true, capabilities: { add: ["NET_ADMIN"] } }
+        volumeMounts: [{ name: config, mountPath: /opt/open5gs/etc/open5gs/upf.yaml, subPath: "upf.yaml" }]
+      volumes:
+      - name: config
+        configMap: { name: open5gs-upf }
+      - name: entrypoint
+        configMap: { name: open5gs-upf-entrypoint, defaultMode: 0777 }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: open5gs-populate
+  namespace: "open5gs"
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: open5gs-populate } }
+  template:
+    metadata: { labels: { app: open5gs-populate } }
+    spec:
+      containers:
+      - name: populate
+        image: docker.io/gradiant/open5gs-dbctl:0.10.3
+        env:
+        - name: DB_URI
+          value: mongodb://open5gs-mongodb/open5gs
+        command:
+        - /bin/bash
+        - -c
+        - |
+          sleep 10
+          open5gs-dbctl add 208930000000001 0C0A34601D4F07677303652C0462535B 63bfa50ee6523365ff14c1f45f88737d
+          open5gs-dbctl add_ue_with_slice 208930000000001 0C0A34601D4F07677303652C0462535B 63bfa50ee6523365ff14c1f45f88737d internet 1 000001
+          open5gs-dbctl add_ue_with_slice 208930000000001 0C0A34601D4F07677303652C0462535B 63bfa50ee6523365ff14c1f45f88737d edge-video 1 000001
+          echo "Subscribers populated. Exiting."

@@ -1,0 +1,17 @@
+# File: kubeadm-join-config.yaml
+apiVersion: kubeadm.k8s.io/v1beta3
+kind: JoinConfiguration
+# Indirizzo del master a cui fare il join
+discovery:
+  bootstrapToken:
+    # Sostituisci con il token generato da 'kubeadm init'
+    apiServerEndpoint: "192.168.56.11:6443"
+    token: "oy1o9j.980r9j5sgdha9p3v" 
+    # Sostituisci con l'hash generato da 'kubeadm init'
+    caCertHashes:
+      - "sha256:4817b8e210c631bf5b2f4f0172c0059e906f13132037829378f1a907b332d390"
+# Questa è la parte cruciale per il worker
+nodeRegistration:
+  kubeletExtraArgs:
+    # USA L'IP DI QUESTO SPECIFICO WORKER!
+    node-ip: "192.168.56.14"

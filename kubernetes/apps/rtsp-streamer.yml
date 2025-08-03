@@ -1,0 +1,39 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: rtsp-streamer-svc
+spec:
+  selector:
+    app: rtsp-streamer
+  ports:
+    - protocol: TCP
+      port: 8554
+      targetPort: 8554
+      name: rtsp
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: rtsp-streamer
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: rtsp-streamer
+  template:
+    metadata:
+      labels:
+        app: rtsp-streamer
+    spec:
+      nodeSelector:
+        "topology.kubernetes.io/zone": edge
+      containers:
+      - name: mediamtx
+        image: bluenviron/mediamtx:latest-ffmpeg
+        ports:
+        - containerPort: 8554
+        env:
+        - name: MTX_PROTOCOLS
+          value: "tcp"
+        - name: MTX_PATHS_ALL_SOURCE
+          value: "ffmpeg -re -stream_loop -1 -i https://test-videos.co.uk/vids/bigbuckbunny/mp4/h264/1080/Big_Buck_Bunny_1080_10s_1MB.mp4 -c copy -f rtsp rtsp://localhost:8554/stream"

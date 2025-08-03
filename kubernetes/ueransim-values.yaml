@@ -1,0 +1,18 @@
+# /vagrant/kubernetes/ueransim-values.yaml
+
+# La sezione nodeAffinity è stata rimossa per semplificare il deployment iniziale.
+
+gnb:
+  mcc: "208"
+  mnc: "93"
+  nci: "0x000000010"
+  idLength: 32
+  tac: 1
+
+ue:
+  enabled: false
+
+config:
+  gnb:
+    amf:
+      address: open5gs-core-amf-ngap

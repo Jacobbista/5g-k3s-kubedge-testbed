@@ -1,0 +1,59 @@
+# /vagrant/kubernetes/apps/ueransim-ue.yml
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ueransim-ue-config
+data:
+  ue.yaml: |
+    # IMSI
+    supi: 'imsi-208930000000001'
+    # Mobile Country Code
+    mcc: '208'
+    # Mobile Network Code
+    mnc: '93'
+    # Permanent Subscription Key
+    key: '0C0A34601D4F07677303652C0462535B'
+    # Operator Code
+    op: '63bfa50ee6523365ff14c1f45f88737d'
+    # Authentication Management Field
+    amf: '8000'
+    # DNN
+    dnn: 'edge-video'
+    # Slice
+    slice:
+      sst: 1
+      sd: '000001'
+    # GTP Tunnel IP (leave empty to auto-detect)
+    gtp-ip: ""
+    # SCTP bind IP (leave empty to auto-detect)
+    sctp-ip: ""
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ueransim-ue
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ueransim-ue
+  template:
+    metadata:
+      labels:
+        app: ueransim-ue
+    spec:
+      containers:
+      - name: ue
+        image: gradiant/ueransim:3.2.6
+        command: ["/bin/sh", "-c"]
+        args:
+        - "sleep 5s && /ueransim/nr-ue -c /ueransim/config/ue.yaml"
+        volumeMounts:
+        - name: ueransim-ue-config-volume
+          mountPath: /ueransim/config
+      volumes:
+      - name: ueransim-ue-config-volume
+        configMap:
+          name: ueransim-ue-config
