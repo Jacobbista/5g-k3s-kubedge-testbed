@@ -1,0 +1,80 @@
+# ansible/cluster.yml
+# ===================
+# Playbook principale di Ansible per configurare l'intero cluster Kubernetes.
+
+# -----------------------------------------------------------------------------
+# PLAY 1: Configura il Nodo Master Kubernetes
+# -----------------------------------------------------------------------------
+- hosts: masters
+  become: yes
+  tasks:
+    # Task 1: Inizializza il cluster (solo se non già fatto)
+    - name: MASTER | Inizializza il cluster (solo se non già fatto)
+      command: kubeadm init --config /vagrant/ansible/kubeadm-config.yaml
+      args:
+        creates: /etc/kubernetes/admin.conf
+      changed_when: true
+
+    # Task 2: Genera il comando di join per estrarre token e hash
+    - name: MASTER | Genera il comando di join per estrarre token e hash
+      command: kubeadm token create --print-join-command
+      register: join_command_result
+      changed_when: true
+
+    # Task 3: Estrae e salva il TOKEN di join come "fatto"
+    - name: MASTER | Estrae e salva il TOKEN di join
+      set_fact:
+        join_token: "{{ join_command_result.stdout_lines[0].split(' ')[4] }}"
+
+    # Task 4: Estrae e salva l'HASH del certificato come "fatto"
+    - name: MASTER | Estrae e salva l'HASH del certificato
+      set_fact:
+        join_hash: "{{ join_command_result.stdout_lines[0].split(' ')[6].split(':')[1] }}"
+
+    # Task 5: Crea la directory .kube per l'utente 'vagrant'
+    - name: MASTER | Crea la directory .kube per l'utente 'vagrant'
+      file:
+        path: /home/vagrant/.kube
+        state: directory
+        owner: vagrant
+        group: vagrant
+        mode: 0755
+
+    # Task 6: Copia il file di configurazione per kubectl
+    - name: MASTER | Copia il file di configurazione per kubectl
+      copy:
+        src: /etc/kubernetes/admin.conf
+        dest: /home/vagrant/.kube/config
+        remote_src: yes
+        owner: vagrant
+        group: vagrant
+
+    # Task 7: Installa la rete per Pod (Flannel CNI)
+    - name: MASTER | Installa la rete per Pod (Flannel CNI)
+      command: kubectl apply -f https://raw.githubusercontent.com/flannel-io/flannel/master/Documentation/kube-flannel.yml
+      args:
+        creates: /etc/cni/net.d/10-flannel.conflist
+      become: no # Esegui come utente vagrant
+      changed_when: true
+
+# -----------------------------------------------------------------------------
+# PLAY 2: Aggiunge i Nodi Worker al Cluster
+# -----------------------------------------------------------------------------
+- hosts: k8s-workers
+  become: yes
+  tasks:
+    # Task 1: Resetta eventuali installazioni precedenti
+    - name: WORKER | Resetta eventuali installazioni precedenti
+      command: kubeadm reset -f
+      changed_when: true
+
+    # Task 2: Crea il file di configurazione per il join
+    - name: WORKER | Crea il file di configurazione per il join dal template
+      template:
+        src: kubeadm-join-config.yaml.j2 # MODIFICATO: Rimosso "ansible/" dal percorso
+        dest: /tmp/kubeadm-join-config.yaml
+
+    # Task 3: Unisce il worker al cluster usando il file di configurazione
+    - name: WORKER | Unisce il worker al cluster
+      command: kubeadm join --config /tmp/kubeadm-join-config.yaml
+      changed_when: true
