@@ -1,0 +1,21 @@
+---
+- name: Installa Helm 3 (se manca)
+  args:
+    creates: /usr/local/bin/helm
+  shell: |
+    curl -fsSL https://raw.githubusercontent.com/helm/helm/master/scripts/get-helm-3 | bash
+
+- name: Crea namespace 5g
+  become_user: vagrant
+  environment:
+    KUBECONFIG: /home/vagrant/.kube/config
+  shell: kubectl create ns 5g || true
+
+- name: Installa/aggiorna Open5GS (chart OCI Gradiant)
+  become_user: vagrant
+  environment:
+    KUBECONFIG: /home/vagrant/.kube/config
+  shell: |
+    helm upgrade --install open5gs oci://registry-1.docker.io/gradiant/open5gs \
+      --version 2.2.0 -n 5g
+

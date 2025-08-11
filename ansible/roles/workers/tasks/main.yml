@@ -1,0 +1,9 @@
+---
+- name: Reset (se necessario)
+  command: kubeadm reset -f
+  ignore_errors: yes
+
+- name: Esegui join se non ancora unito
+  args:
+    creates: /etc/kubernetes/kubelet.conf
+  shell: "{{ hostvars[groups['masters'][0]].kubeadm_join_cmd }}"

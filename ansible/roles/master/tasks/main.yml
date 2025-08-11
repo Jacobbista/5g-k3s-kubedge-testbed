@@ -1,0 +1,49 @@
+---
+- name: Genera kubeadm-config
+  template:
+    src: kubeadm-config.yaml.j2
+    dest: /tmp/kubeadm-config.yaml
+
+- name: kubeadm init (idempotente)
+  command: kubeadm init --config /tmp/kubeadm-config.yaml --upload-certs
+  args:
+    creates: /etc/kubernetes/admin.conf
+
+- name: Copia kubeconfig per utente vagrant
+  shell: |
+    mkdir -p ~vagrant/.kube
+    cp /etc/kubernetes/admin.conf ~vagrant/.kube/config
+    chown -R vagrant:vagrant ~vagrant/.kube
+
+- name: Installa Calico CNI
+  become_user: vagrant
+  environment:
+    KUBECONFIG: /home/vagrant/.kube/config
+  shell: |
+    kubectl apply -f https://raw.githubusercontent.com/projectcalico/calico/v3.26.1/manifests/calico.yaml
+  args:
+    creates: /var/tmp/calico.applied
+
+- name: Marca Calico come applicato
+  file:
+    path: /var/tmp/calico.applied
+    state: touch
+
+- name: Attendi API server pronto
+  become_user: vagrant
+  environment:
+    KUBECONFIG: /home/vagrant/.kube/config
+  shell: kubectl get nodes
+  register: kget
+  retries: 30
+  delay: 10
+  until: kget.rc == 0
+
+- name: Genera join command
+  command: kubeadm token create --print-join-command
+  register: join_out
+
+- name: Pubblica join command come fact (con socket containerd)
+  set_fact:
+    kubeadm_join_cmd: "{{ join_out.stdout }} --cri-socket unix:///run/containerd/containerd.sock"
+

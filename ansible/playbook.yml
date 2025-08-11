@@ -1,0 +1,24 @@
+---
+- name: 1) Base setup (containerd + kube tools) su tutti i nodi
+  hosts: masters,workers
+  become: yes
+  roles:
+    - setup
+
+- name: 2) Inizializza master e pubblica join command
+  hosts: masters
+  become: yes
+  roles:
+    - master
+
+- name: 3) Join automatico dei worker
+  hosts: workers
+  become: yes
+  roles:
+    - workers
+
+- name: 4) Installa Open5GS via Helm (sul master)
+  hosts: masters
+  become: yes
+  roles:
+    - open5gs

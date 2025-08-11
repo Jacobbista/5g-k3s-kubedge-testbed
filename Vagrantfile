@@ -1,87 +1,101 @@
-# Vagrantfile
-# -*- mode: ruby -*-
-# vi: set ft=ruby :
-
 Vagrant.configure("2") do |config|
-  config.vm.box = "ubuntu/jammy64"
+  # Mantieni la chiave "insecure": così l'ansible-controller può accedere con /home/vagrant/.ssh/id_rsa
   config.ssh.insert_key = false
-  config.vm.provider "virtualbox" do |v|
-    v.memory = 8192
-    v.cpus = 2
+  config.vm.box = "ubuntu/focal64"
+
+  # Blocco riutilizzabile per scrivere /etc/hosts in modo idempotente e CORRETTO
+  SHARED_HOSTS = <<-SCRIPT
+cat >/tmp/hosts.add <<'EOF'
+192.168.56.10 ansible-controller
+192.168.56.11 kube-master
+192.168.56.12 kube-worker-1
+192.168.56.13 kube-worker-2
+192.168.56.14 kube-worker-3
+EOF
+
+for h in ansible-controller kube-master kube-worker-1 kube-worker-2 kube-worker-3; do
+  sudo sed -i "/[[:space:]]$h$/d" /etc/hosts
+done
+sudo tee -a /etc/hosts < /tmp/hosts.add
+SCRIPT
+
+  # kube-master
+  config.vm.define "kube-master" do |m|
+    m.vm.hostname = "kube-master"
+    m.vm.network "private_network", ip: "192.168.56.11"
+    m.vm.provider "virtualbox" do |vb|
+      vb.name = "vagrant-k8s-repo_kube-master"
+      vb.memory = 4096
+      vb.cpus = 2
+    end
+    m.vm.provision "shell", inline: SHARED_HOSTS
   end
 
-  vms = {
-    "ansible-controller" => { :ip => "192.168.56.10" },
-    "k8s-master"         => { :ip => "192.168.56.11" },
-    "k8s-worker-1"       => { :ip => "192.168.56.12" },
-    "k8s-worker-2"       => { :ip => "192.168.56.13" },
-    "k8s-worker-3"       => { :ip => "192.168.56.14" }
-  }
-
-  # Provisioning della chiave SSH per il controller
-  config.vm.provision "file", source: "~/.vagrant.d/insecure_private_key", destination: ".ssh/id_rsa"
-
-  vms.each do |hostname, properties|
-    config.vm.define hostname do |node|
-      node.vm.hostname = hostname
-      node.vm.network "private_network", ip: properties[:ip]
-      node.vm.synced_folder ".", "/vagrant"
-
-      node.vm.provision "shell", inline: <<-SHELL
-        echo "--- Eseguo provisioning su #{hostname} ---"
-        echo "--- Aggiorno pacchetti ---"
-        sudo apt-get update -y
-        echo "--- Disabilito Firewall e Swap ---"
-        sudo ufw disable
-        sudo swapoff -a
-        sudo sed -i '/ swap / s/^\(.*\)$/#\1/g' /etc/fstab
-        echo "--- Abilito IP Forwarding e Kernel Modules per Kubernetes ---"
-        cat <<EOF | sudo tee /etc/modules-load.d/k8s.conf
-overlay
-br_netfilter
-EOF
-        sudo modprobe overlay
-        sudo modprobe br_netfilter
-        cat <<EOF | sudo tee /etc/sysctl.d/k8s.conf
-net.bridge.bridge-nf-call-ip6tables = 1
-net.bridge.bridge-nf-call-iptables = 1
-net.ipv4.ip_forward = 1
-EOF
-        sudo sysctl --system
-        echo "--- Configuro IP statico su interfaccia Host-Only ---"
-        cat <<EOF | sudo tee /etc/netplan/02-vagrant-hostonly.yaml
-network:
-  version: 2
-  ethernets:
-    enp0s8:
-      dhcp4: no
-      addresses: [#{properties[:ip]}/24]
-EOF
-        sudo netplan apply
-        echo "--- Installo containerd (da repo Ubuntu) ---"
-        sudo apt-get install -y containerd
-        sudo mkdir -p /etc/containerd
-        containerd config default | sudo tee /etc/containerd/config.toml
-        sudo sed -i 's/SystemdCgroup = false/SystemdCgroup = true/g' /etc/containerd/config.toml
-        sudo systemctl restart containerd
-        echo "--- Installo Kubernetes v1.30 ---"
-        sudo apt-get install -y apt-transport-https ca-certificates curl gpg
-        curl -fsSL https://pkgs.k8s.io/core:/stable:/v1.30/deb/Release.key | sudo gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
-        echo 'deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v1.30/deb/ /' | sudo tee /etc/apt/sources.list.d/kubernetes.list
-        sudo apt-get update
-        sudo apt-get install -y kubelet=1.30.3-1.1 kubeadm=1.30.3-1.1 kubectl=1.30.3-1.1
-        sudo apt-mark hold kubelet kubeadm kubectl
-        if [ "#{hostname}" = "ansible-controller" ]; then
-          echo "--- Installo Ansible ---"
-          sudo apt-get install -y ansible sshpass
-          sudo chown vagrant:vagrant /home/vagrant/.ssh/id_rsa
-          sudo chmod 600 /home/vagrant/.ssh/id_rsa
-          echo "--- Installo Ansible Galaxy Collections ---"
-          sudo -u vagrant bash -c "ansible-galaxy collection install community.general"
-          sudo -u vagrant bash -c "ansible-galaxy collection install kubernetes.core"
-        fi
-        echo "--- Provisioning completato per #{hostname} ---"
-      SHELL
+  # kube-worker-1
+  config.vm.define "kube-worker-1" do |w|
+    w.vm.hostname = "kube-worker-1"
+    w.vm.network "private_network", ip: "192.168.56.12"
+    w.vm.provider "virtualbox" do |vb|
+      vb.name = "vagrant-k8s-repo_kube-worker-1"
+      vb.memory = 4096
+      vb.cpus = 2
     end
+    w.vm.provision "shell", inline: SHARED_HOSTS
+  end
+
+  # kube-worker-2
+  config.vm.define "kube-worker-2" do |w|
+    w.vm.hostname = "kube-worker-2"
+    w.vm.network "private_network", ip: "192.168.56.13"
+    w.vm.provider "virtualbox" do |vb|
+      vb.name = "vagrant-k8s-repo_kube-worker-2"
+      vb.memory = 4096
+      vb.cpus = 2
+    end
+    w.vm.provision "shell", inline: SHARED_HOSTS
+  end
+
+  # kube-worker-3
+  config.vm.define "kube-worker-3" do |w|
+    w.vm.hostname = "kube-worker-3"
+    w.vm.network "private_network", ip: "192.168.56.14"
+    w.vm.provider "virtualbox" do |vb|
+      vb.name = "vagrant-k8s-repo_kube-worker-3"
+      vb.memory = 4096
+      vb.cpus = 2
+    end
+    w.vm.provision "shell", inline: SHARED_HOSTS
+  end
+
+  # ansible-controller (parte per ultimo)
+  config.vm.define "ansible-controller" do |a|
+    a.vm.hostname = "ansible-controller"
+    a.vm.network "private_network", ip: "192.168.56.10"
+    a.vm.provider "virtualbox" do |vb|
+      vb.name = "vagrant-k8s-repo_ansible-controller"
+      vb.memory = 2048
+      vb.cpus = 2
+    end
+
+    # /etc/hosts corretto
+    a.vm.provision "shell", inline: SHARED_HOSTS
+
+    # Copia la insecure_private_key dal tuo host Windows al controller come id_rsa
+    a.vm.provision "file",
+      source: "#{ENV['USERPROFILE']}/.vagrant.d/insecure_private_key",
+      destination: "/home/vagrant/.ssh/id_rsa"
+
+    a.vm.provision "shell", inline: <<-SHELL
+      sudo chown vagrant:vagrant /home/vagrant/.ssh/id_rsa
+      sudo chmod 600 /home/vagrant/.ssh/id_rsa
+      echo "🚀 Installing Ansible & tools..."
+      sudo apt-get update -y
+      sudo apt-get install -y ansible git curl
+      echo "✅ Ansible ready. Running playbook automatically..."
+      cd /vagrant/ansible
+      ansible --version
+      ansible-playbook -i inventory.ini playbook.yml
+    SHELL
   end
 end
+

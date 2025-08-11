@@ -1,0 +1,130 @@
+---
+# 1) Preparazione host (swap, moduli, sysctl, pacchetti base)
+- name: Disabilita swap (runtime)
+  command: swapoff -a
+  when: ansible_swaptotal_mb | default(0) | int > 0
+  changed_when: false
+  ignore_errors: true
+
+- name: Disabilita swap in fstab
+  replace:
+    path: /etc/fstab
+    regexp: '^\s*([^#]\S+\s+\S+\s+swap\s+\S+)\s+\S+'
+    replace: '# \1'
+  register: swap_fstab
+
+- name: Moduli kernel richiesti
+  copy:
+    dest: /etc/modules-load.d/k8s.conf
+    content: |
+      overlay
+      br_netfilter
+
+- name: Carica moduli kernel
+  shell: |
+    modprobe overlay || true
+    modprobe br_netfilter || true
+
+- name: Sysctl per Kubernetes
+  copy:
+    dest: /etc/sysctl.d/99-kubernetes-cri.conf
+    content: |
+      net.bridge.bridge-nf-call-iptables = 1
+      net.bridge.bridge-nf-call-ip6tables = 1
+      net.ipv4.ip_forward = 1
+
+- name: Applica sysctl
+  command: sysctl --system
+
+- name: Pacchetti di base
+  apt:
+    name:
+      - apt-transport-https
+      - ca-certificates
+      - curl
+      - gnupg
+      - lsb-release
+      - software-properties-common
+    state: present
+    update_cache: yes
+
+# 2) REPO KUBERNETES (pkgs.k8s.io + keyring)
+- name: Crea la cartella keyrings
+  file:
+    path: /etc/apt/keyrings
+    state: directory
+    mode: '0755'
+
+- name: Scarica la Release.key di Kubernetes (v1.29)
+  get_url:
+    url: https://pkgs.k8s.io/core:/stable:/v1.29/deb/Release.key
+    dest: /etc/apt/keyrings/kubernetes-apt-keyring.asc
+    mode: '0644'
+    force: yes
+
+- name: Converte la chiave in formato gpg (dearmor)
+  command: >
+    gpg --dearmor
+    -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+    /etc/apt/keyrings/kubernetes-apt-keyring.asc
+  args:
+    creates: /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+
+- name: Permessi chiave gpg
+  file:
+    path: /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+    mode: '0644'
+
+- name: Aggiunge repo Kubernetes (pkgs.k8s.io v1.29)
+  apt_repository:
+    filename: kubernetes
+    repo: >
+      deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg]
+      https://pkgs.k8s.io/core:/stable:/v1.29/deb/ /
+    state: present
+
+- name: Aggiorna cache APT dopo aggiunta repo K8s
+  apt:
+    update_cache: yes
+
+# 3) containerd
+- name: Installa containerd
+  apt:
+    name: containerd
+    state: present
+
+- name: Genera config di containerd se manca
+  shell: |
+    [ -f /etc/containerd/config.toml ] || (mkdir -p /etc/containerd && containerd config default > /etc/containerd/config.toml)
+  args:
+    executable: /bin/bash
+
+- name: Abilita SystemdCgroup in containerd
+  replace:
+    path: /etc/containerd/config.toml
+    regexp: '^\s*SystemdCgroup\s*=\s*false'
+    replace: '            SystemdCgroup = true'
+  notify: Restart containerd
+
+- name: Abilita e avvia containerd
+  systemd:
+    name: containerd
+    enabled: yes
+    state: started
+
+# 4) Tool Kubernetes (canale v1.29)
+- name: Installa kubelet/kubeadm/kubectl (dal canale v1.29)
+  apt:
+    name:
+      - kubelet
+      - kubeadm
+      - kubectl
+    state: present
+    update_cache: yes
+  register: k8s_pkgs
+
+- name: Blocca versione kubelet/kubeadm/kubectl
+  command: apt-mark hold kubelet kubeadm kubectl
+  when: k8s_pkgs is changed
+
+
