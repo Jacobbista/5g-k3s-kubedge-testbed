@@ -1,9 +1,15 @@
 ---
-- name: 1) Base setup (containerd + kube tools) su tutti i nodi
-  hosts: masters,workers
+- name: 1) Base setup (containerd + kube tools) su nodi Kubernetes
+  hosts: k8s_cluster
   become: yes
   roles:
     - setup
+
+- name: 1b) Base setup (containerd only) su nodi edge
+  hosts: edge_nodes
+  become: yes
+  roles:
+    - edge_setup
 
 - name: 2) Inizializza master e pubblica join command
   hosts: masters
@@ -17,8 +23,38 @@
   roles:
     - workers
 
-- name: 4) Installa Open5GS via Helm (sul master)
+- name: 4) Installazione e configurazione KubeEdge
+  hosts: masters
+  become: yes
+  roles:
+    - kubeedge
+
+- name: 5) Join automatico del nodo edge
+  hosts: edge_nodes
+  become: yes
+  roles:
+    - kubeedge_edge
+
+- name: 6) Deploy Open5GS con persistent volumes e OVS-CNI
   hosts: masters
   become: yes
   roles:
     - open5gs
+
+- name: 7) Installazione dashboard e monitoring
+  hosts: masters
+  become: yes
+  roles:
+    - monitoring
+
+- name: 8) Deploy servizi IoT medici simulati
+  hosts: masters
+  become: yes
+  roles:
+    - healthcare
+
+- name: 9) Test di carico e verifica funzionalità KubeEdge
+  hosts: masters
+  become: yes
+  roles:
+    - load_testing

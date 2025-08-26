@@ -1,0 +1,27 @@
+apiVersion: v1
+kind: Secret
+metadata:
+  name: cloudcore-certs
+  namespace: kubeedge
+type: Opaque
+data:
+  server.crt: LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0tCg==
+  server.key: LS0tLS1CRUdJTiBQUklWQVRFIEtFWS0tLS0tCg==
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: cloudcore-ca
+  namespace: kubeedge
+type: Opaque
+data:
+  rootCA.crt: LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0tCg==
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: cloudcore-kubeconfig
+  namespace: kubeedge
+type: Opaque
+data:
+  kubeconfig: LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0tCg==

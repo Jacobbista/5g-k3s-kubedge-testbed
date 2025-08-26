@@ -1,0 +1,69 @@
+---
+- name: Install KubeEdge edgecore
+  shell: |
+    wget https://github.com/kubeedge/kubeedge/releases/download/v1.15.0/kubeedge-v1.15.0-linux-amd64.tar.gz
+    tar -xzf kubeedge-v1.15.0-linux-amd64.tar.gz
+    sudo cp kubeedge-v1.15.0-linux-amd64/edge/edgecore /usr/local/bin/
+    sudo chmod +x /usr/local/bin/edgecore
+  args:
+    creates: /usr/local/bin/edgecore
+  changed_when: false
+
+- name: Get edge token from master
+  slurp:
+    src: /tmp/edge-token
+  register: edge_token_file
+  delegate_to: "{{ groups['masters'][0] }}"
+
+- name: Generate edgecore configuration
+  template:
+    src: edgecore-config.yaml.j2
+    dest: /etc/kubeedge/config/edgecore.yaml
+    mode: '0644'
+  vars:
+    edge_token: "{{ edge_token_file.content | b64decode }}"
+    master_ip: "{{ hostvars[groups['masters'][0]]['ansible_host'] }}"
+
+- name: Create KubeEdge config directory
+  file:
+    path: /etc/kubeedge/config
+    state: directory
+    mode: '0755'
+
+- name: Create KubeEdge logs directory
+  file:
+    path: /var/log/kubeedge
+    state: directory
+    mode: '0755'
+
+- name: Create KubeEdge systemd service
+  template:
+    src: edgecore.service.j2
+    dest: /etc/systemd/system/edgecore.service
+    mode: '0644'
+
+- name: Enable and start edgecore service
+  systemd:
+    name: edgecore
+    enabled: yes
+    state: started
+    daemon_reload: yes
+
+- name: Wait for edgecore to be ready
+  command: systemctl is-active edgecore
+  register: edgecore_status
+  retries: 30
+  delay: 10
+  until: edgecore_status.rc == 0
+
+- name: Label edge node with role
+  command: kubectl label node {{ inventory_hostname }} node-role.kubernetes.io/edge=true --overwrite
+  register: label_result
+  changed_when: label_result.rc == 0
+  failed_when: label_result.rc != 0
+  delegate_to: "{{ groups['masters'][0] }}"
+  become_user: vagrant
+
+- name: Show edge node status
+  debug:
+    msg: "KubeEdge edge node successfully configured and started with edge role"

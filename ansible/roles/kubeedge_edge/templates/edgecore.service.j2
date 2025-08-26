@@ -1,0 +1,15 @@
+[Unit]
+Description=KubeEdge EdgeCore
+Documentation=https://kubeedge.io
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/edgecore --config=/etc/kubeedge/config/edgecore.yaml
+Restart=always
+RestartSec=10
+User=root
+Environment=GODEBUG=1
+
+[Install]
+WantedBy=multi-user.target

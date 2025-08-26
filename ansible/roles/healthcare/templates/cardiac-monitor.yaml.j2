@@ -1,0 +1,65 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cardiac-monitor
+  namespace: healthcare
+  labels:
+    app: cardiac-monitor
+    type: medical-device
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: cardiac-monitor
+  template:
+    metadata:
+      labels:
+        app: cardiac-monitor
+        type: medical-device
+    spec:
+      containers:
+      - name: cardiac-monitor
+        image: nginx:alpine
+        ports:
+        - containerPort: 80
+        env:
+        - name: DEVICE_TYPE
+          value: "cardiac-monitor"
+        - name: DEVICE_ID
+          value: "{{ '{{' }} .HOSTNAME {{ '}}' }}"
+        - name: MONITORING_INTERVAL
+          value: "1000"
+        resources:
+          requests:
+            memory: "64Mi"
+            cpu: "50m"
+          limits:
+            memory: "128Mi"
+            cpu: "100m"
+        livenessProbe:
+          httpGet:
+            path: /
+            port: 80
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /
+            port: 80
+          initialDelaySeconds: 5
+          periodSeconds: 5
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: cardiac-monitor
+  namespace: healthcare
+  labels:
+    app: cardiac-monitor
+spec:
+  ports:
+  - port: 80
+    targetPort: 80
+    protocol: TCP
+  selector:
+    app: cardiac-monitor

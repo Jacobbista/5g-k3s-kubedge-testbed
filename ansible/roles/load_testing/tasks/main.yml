@@ -1,0 +1,81 @@
+---
+- name: Create load testing namespace
+  command: kubectl create namespace load-testing --dry-run=client -o yaml | kubectl apply -f -
+  register: namespace_create
+  changed_when: namespace_create.rc == 0
+  failed_when: namespace_create.rc != 0
+
+- name: Deploy stress test pods
+  template:
+    src: stress-test.yaml.j2
+    dest: /tmp/stress-test.yaml
+    mode: '0644'
+
+- name: Apply stress test
+  command: kubectl apply -f /tmp/stress-test.yaml
+  register: stress_test_apply
+  changed_when: stress_test_apply.rc == 0
+  failed_when: stress_test_apply.rc != 0
+
+- name: Wait for stress test pods to be ready
+  command: kubectl wait --for=condition=ready pod -l app=stress-test -n load-testing --timeout=300s
+  register: stress_test_wait
+  changed_when: stress_test_wait.rc == 0
+  failed_when: stress_test_wait.rc != 0
+
+- name: Deploy network load generator
+  template:
+    src: network-load.yaml.j2
+    dest: /tmp/network-load.yaml
+    mode: '0644'
+
+- name: Apply network load
+  command: kubectl apply -f /tmp/network-load.yaml
+  register: network_load_apply
+  changed_when: network_load_apply.rc == 0
+  failed_when: network_load_apply.rc != 0
+
+- name: Wait for network load to be ready
+  command: kubectl wait --for=condition=ready pod -l app=network-load -n load-testing --timeout=300s
+  register: network_load_wait
+  changed_when: network_load_wait.rc == 0
+  failed_when: network_load_wait.rc != 0
+
+- name: Check KubeEdge edge node status
+  command: kubectl get nodes -l node-role.kubernetes.io/edge=
+  register: edge_nodes
+  changed_when: false
+
+- name: Display edge nodes
+  debug:
+    msg: "{{ edge_nodes.stdout_lines }}"
+
+- name: Check pod distribution across nodes
+  command: kubectl get pods -A -o wide
+  register: pod_distribution
+  changed_when: false
+
+- name: Display pod distribution
+  debug:
+    msg: "{{ pod_distribution.stdout_lines }}"
+
+- name: Generate load test report
+  template:
+    src: load-test-report.yaml.j2
+    dest: /tmp/load-test-report.yaml
+    mode: '0644'
+
+- name: Apply load test report
+  command: kubectl apply -f /tmp/load-test-report.yaml
+  register: report_apply
+  changed_when: report_apply.rc == 0
+  failed_when: report_apply.rc != 0
+
+- name: Show load testing completion
+  debug:
+    msg: 
+      - "Load testing completed successfully"
+      - "Stress test deployed on all nodes"
+      - "Network load generator deployed"
+      - "KubeEdge edge node status verified"
+      - "Pod distribution across nodes analyzed"

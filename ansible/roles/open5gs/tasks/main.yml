@@ -1,21 +1,80 @@
 ---
-- name: Installa Helm 3 (se manca)
-  args:
-    creates: /usr/local/bin/helm
-  shell: |
-    curl -fsSL https://raw.githubusercontent.com/helm/helm/master/scripts/get-helm-3 | bash
+- name: Create Open5GS namespace
+  command: kubectl create namespace open5gs --kubeconfig=/etc/kubernetes/admin.conf
+  register: namespace_create
+  changed_when: namespace_create.rc == 0
+  failed_when: namespace_create.rc != 0
+  ignore_errors: yes
 
-- name: Crea namespace 5g
-  become_user: vagrant
-  environment:
-    KUBECONFIG: /home/vagrant/.kube/config
-  shell: kubectl create ns 5g || true
+- name: Install OVS-CNI
+  command: kubectl apply -f https://raw.githubusercontent.com/k8snetworkplumbingwg/ovs-cni/main/examples/ovs-cni.yml --kubeconfig=/etc/kubernetes/admin.conf
+  register: ovs_cni_install
+  changed_when: ovs_cni_install.rc == 0
+  failed_when: ovs_cni_install.rc != 0
 
-- name: Installa/aggiorna Open5GS (chart OCI Gradiant)
-  become_user: vagrant
-  environment:
-    KUBECONFIG: /home/vagrant/.kube/config
-  shell: |
-    helm upgrade --install open5gs oci://registry-1.docker.io/gradiant/open5gs \
-      --version 2.2.0 -n 5g
+- name: Wait for OVS-CNI to be ready
+  command: kubectl wait --for=condition=ready pod -l app=ovs-cni -n kube-system --timeout=300s --kubeconfig=/etc/kubernetes/admin.conf
+  register: ovs_cni_wait
+  changed_when: ovs_cni_wait.rc == 0
+  failed_when: ovs_cni_wait.rc != 0
+
+- name: Create Open5GS configuration
+  template:
+    src: open5gs-config.yaml.j2
+    dest: /tmp/open5gs-config.yaml
+    mode: '0644'
+
+- name: Apply Open5GS configuration
+  command: kubectl apply -f /tmp/open5gs-config.yaml --kubeconfig=/etc/kubernetes/admin.conf
+  register: open5gs_config_apply
+  changed_when: open5gs_config_apply.rc == 0
+  failed_when: open5gs_config_apply.rc != 0
+
+- name: Deploy Open5GS core components
+  template:
+    src: open5gs-deployment.yaml.j2
+    dest: /tmp/open5gs-deployment.yaml
+    mode: '0644'
+
+- name: Apply Open5GS deployment
+  command: kubectl apply -f /tmp/open5gs-deployment.yaml --kubeconfig=/etc/kubernetes/admin.conf
+  register: open5gs_deploy_apply
+  changed_when: open5gs_deploy_apply.rc == 0
+  failed_when: open5gs_deploy_apply.rc != 0
+
+- name: Wait for Open5GS pods to be ready
+  command: kubectl wait --for=condition=ready pod -l app=open5gs -n open5gs --timeout=600s --kubeconfig=/etc/kubernetes/admin.conf
+  register: open5gs_wait
+  changed_when: open5gs_wait.rc == 0
+  failed_when: open5gs_wait.rc != 0
+
+- name: Create Open5GS services
+  template:
+    src: open5gs-services.yaml.j2
+    dest: /tmp/open5gs-services.yaml
+    mode: '0644'
+
+- name: Apply Open5GS services
+  command: kubectl apply -f /tmp/open5gs-services.yaml --kubeconfig=/etc/kubernetes/admin.conf
+  register: open5gs_services_apply
+  changed_when: open5gs_services_apply.rc == 0
+  failed_when: open5gs_services_apply.rc != 0
+
+- name: Show Open5GS deployment status
+  command: kubectl get pods -n open5gs --kubeconfig=/etc/kubernetes/admin.conf
+  register: open5gs_status
+  changed_when: false
+
+- name: Display Open5GS status
+  debug:
+    msg: "{{ open5gs_status.stdout_lines }}"
+
+- name: Show Open5GS services
+  command: kubectl get svc -n open5gs --kubeconfig=/etc/kubernetes/admin.conf
+  register: open5gs_services
+  changed_when: false
+
+- name: Display Open5GS services
+  debug:
+    msg: "{{ open5gs_services.stdout_lines }}"
 

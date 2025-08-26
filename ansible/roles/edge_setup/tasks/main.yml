@@ -37,7 +37,7 @@
     repo: "deb [arch=amd64 signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/ubuntu jammy stable"
     state: present
 
-- name: Install containerd
+- name: Install containerd only (no Kubernetes components)
   apt:
     name:
       - containerd.io
@@ -66,45 +66,6 @@
     enabled: yes
     state: started
 
-- name: Create kubernetes keyrings directory
-  file:
-    path: /etc/apt/keyrings
-    state: directory
-    mode: '0755'
-
-- name: Add Kubernetes GPG key
-  shell: |
-    curl -fsSL https://pkgs.k8s.io/core:/stable:/v1.29/deb/Release.key | gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
-  args:
-    creates: /etc/apt/keyrings/kubernetes-apt-keyring.gpg
-
-- name: Add Kubernetes repository
-  shell: |
-    echo 'deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v1.29/deb/ /' | tee /etc/apt/sources.list.d/kubernetes.list
-  args:
-    creates: /etc/apt/sources.list.d/kubernetes.list
-
-- name: Install Kubernetes components
-  apt:
-    name:
-      - kubelet
-      - kubeadm
-      - kubectl
-    state: present
-    update_cache: yes
-
-
-
-- name: Disable swap
-  command: swapoff -a
-  changed_when: false
-
-- name: Remove swap from fstab
-  replace:
-    path: /etc/fstab
-    regexp: '^([^#].*?\sswap\s+sw\s+.*)$'
-    replace: '# \1'
-
 - name: Load overlay and br_netfilter modules
   modprobe:
     name: "{{ item }}"
@@ -113,7 +74,7 @@
     - overlay
     - br_netfilter
 
-- name: Configure sysctl for Kubernetes
+- name: Configure sysctl for edge nodes
   sysctl:
     name: "{{ item.name }}"
     value: "{{ item.value }}"
@@ -130,13 +91,3 @@
     enabled: yes
     state: started
     daemon_reload: yes
-
-
-
-
-
-
-
-
-
-

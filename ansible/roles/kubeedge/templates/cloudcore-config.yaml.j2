@@ -1,0 +1,167 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cloudcore-config
+  namespace: kubeedge
+data:
+  cloudcore.yaml: |
+    apiVersion: cloudcore.config.kubeedge.io/v1alpha1
+    kind: CloudCore
+    cloudCore:
+      nodeName: {{ inventory_hostname }}
+      cloudhub:
+        address: 0.0.0.0
+        port: 10000
+        quic:
+          address: 0.0.0.0
+          port: 10001
+        websocket:
+          address: 0.0.0.0
+          port: 10000
+      cloudhub-nginx:
+        address: 0.0.0.0
+        port: 10003
+      devicecontroller:
+        address: 0.0.0.0
+        port: 10004
+      iptablesmanager:
+        mode: external
+      metamanager:
+        context-send-group: cloudhub
+        context-send-module: cloudhub
+      router:
+        address: 0.0.0.0
+        port: 10005
+      synccontroller:
+        address: 0.0.0.0
+        port: 10006
+      dynamiccontroller:
+        address: 0.0.0.0
+        port: 10007
+      cloudstream:
+        address: 0.0.0.0
+        port: 10008
+        enable: true
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cloudcore
+  namespace: kubeedge
+  labels:
+    app: cloudcore
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: cloudcore
+  template:
+    metadata:
+      labels:
+        app: cloudcore
+    spec:
+      serviceAccountName: cloudcore
+      containers:
+      - name: cloudcore
+        image: kubeedge/cloudcore:v1.15.0
+        imagePullPolicy: IfNotPresent
+        command:
+        - cloudcore
+        - --config=/etc/kubeedge/config/cloudcore.yaml
+        ports:
+        - containerPort: 10000
+          name: cloudhub
+        - containerPort: 10001
+          name: quic
+        - containerPort: 10003
+          name: cloudhub-nginx
+        - containerPort: 10004
+          name: device-ctrl
+        - containerPort: 10005
+          name: router
+        - containerPort: 10006
+          name: synccontroller
+        - containerPort: 10007
+          name: dynamic-ctrl
+        - containerPort: 10008
+          name: cloudstream
+        volumeMounts:
+        - name: config
+          mountPath: /etc/kubeedge/config
+      volumes:
+      - name: config
+        configMap:
+          name: cloudcore-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: cloudcore
+  namespace: kubeedge
+  labels:
+    app: cloudcore
+spec:
+  ports:
+  - name: cloudhub
+    port: 10000
+    targetPort: 10000
+  - name: quic
+    port: 10001
+    targetPort: 10001
+  - name: cloudhub-nginx
+    port: 10003
+    targetPort: 10003
+  - name: devicecontroller
+    port: 10004
+    targetPort: 10004
+  - name: router
+    port: 10005
+    targetPort: 10005
+  - name: synccontroller
+    port: 10006
+    targetPort: 10006
+  - name: dynamiccontroller
+    port: 10007
+    targetPort: 10007
+  - name: cloudstream
+    port: 10008
+    targetPort: 10008
+  selector:
+    app: cloudcore
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: cloudcore
+  namespace: kubeedge
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: cloudcore
+rules:
+- apiGroups: [""]
+  resources: ["nodes", "pods", "services", "endpoints", "persistentvolumes", "persistentvolumeclaims", "events", "configmaps", "secrets"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+- apiGroups: ["apps"]
+  resources: ["deployments", "daemonsets", "statefulsets"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+- apiGroups: ["networking.k8s.io"]
+  resources: ["networkpolicies"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+- apiGroups: ["rbac.authorization.k8s.io"]
+  resources: ["clusterroles", "clusterrolebindings", "roles", "rolebindings"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: cloudcore
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: cloudcore
+subjects:
+- kind: ServiceAccount
+  name: cloudcore
+  namespace: kubeedge

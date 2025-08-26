@@ -1,9 +1,32 @@
 ---
-- name: Reset (se necessario)
-  command: kubeadm reset -f
-  ignore_errors: yes
+- name: Get join command from master
+  slurp:
+    src: /tmp/worker-join-command
+  register: join_command_file
+  delegate_to: "{{ groups['masters'][0] }}"
 
-- name: Esegui join se non ancora unito
-  args:
-    creates: /etc/kubernetes/kubelet.conf
-  shell: "{{ hostvars[groups['masters'][0]].kubeadm_join_cmd }}"
+- name: Join worker to cluster
+  command: "{{ join_command_file.content | b64decode }}"
+  register: join_result
+  changed_when: join_result.rc == 0
+  failed_when: join_result.rc != 0 and "This node has joined the cluster" not in join_result.stderr
+
+- name: Wait for node to be ready
+  command: kubectl wait --for=condition=ready node/{{ inventory_hostname }} --timeout=300s
+  register: node_wait
+  changed_when: node_wait.rc == 0
+  failed_when: node_wait.rc != 0
+  delegate_to: "{{ groups['masters'][0] }}"
+  become_user: vagrant
+
+- name: Label worker node with role
+  command: kubectl label node {{ inventory_hostname }} node-role.kubernetes.io/worker=true --overwrite
+  register: label_result
+  changed_when: label_result.rc == 0
+  failed_when: label_result.rc != 0
+  delegate_to: "{{ groups['masters'][0] }}"
+  become_user: vagrant
+
+- name: Show worker joined successfully
+  debug:
+    msg: "Worker {{ inventory_hostname }} successfully joined the cluster with worker role"
