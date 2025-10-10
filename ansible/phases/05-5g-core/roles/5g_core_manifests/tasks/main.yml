@@ -1,0 +1,1156 @@
+---
+- name: Create 5G namespace
+  shell: kubectl create namespace 5g --dry-run=client -o yaml | kubectl apply -f -
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Create MEC namespace
+  shell: kubectl create namespace mec --dry-run=client -o yaml | kubectl apply -f -
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Create hostpath storage class for persistent volumes
+  copy:
+    content: |
+      apiVersion: storage.k8s.io/v1
+      kind: StorageClass
+      metadata:
+        name: hostpath-storage
+      provisioner: kubernetes.io/host-path
+      volumeBindingMode: Immediate
+    dest: /tmp/hostpath-storage-class.yaml
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Apply hostpath storage class
+  shell: kubectl apply -f /tmp/hostpath-storage-class.yaml
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Ensure crictl configured on worker
+  copy:
+    content: |
+      runtime-endpoint: unix:///run/k3s/containerd/containerd.sock
+      image-endpoint: unix:///run/k3s/containerd/containerd.sock
+      timeout: 10
+      debug: false
+    dest: /etc/crictl.yaml
+    mode: '0644'
+  delegate_to: "{{ groups['workers'][0] }}"
+  run_once: true
+
+- name: Ensure crictl configured on edge
+  copy:
+    content: |
+      runtime-endpoint: unix:///run/k3s/containerd/containerd.sock
+      image-endpoint: unix:///run/k3s/containerd/containerd.sock
+      timeout: 10
+      debug: false
+    dest: /etc/crictl.yaml
+    mode: '0644'
+  delegate_to: "{{ groups['edges'][0] }}"
+  run_once: true
+
+- name: Pre-pull required images on worker
+  shell: |
+    set -e
+    for img in \
+      docker.io/jacobbista/comnetsemu-5gc:latest \
+      docker.io/jacobbista/comnetsemu-ueransim:latest \
+      docker.io/jacobbista/comnetsemu-mec:latest; do
+      crictl pull "$img" || true
+    done
+  delegate_to: "{{ groups['workers'][0] }}"
+  run_once: true
+
+- name: Pre-pull required images on edge
+  shell: |
+    set -e
+    for img in \
+      docker.io/jacobbista/comnetsemu-5gc:latest \
+      docker.io/jacobbista/comnetsemu-ueransim:latest \
+      docker.io/jacobbista/comnetsemu-mec:latest; do
+      crictl pull "$img" || true
+    done
+  delegate_to: "{{ groups['edges'][0] }}"
+  run_once: true
+
+- name: Deploy MongoDB Deployment
+  copy:
+    content: |
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: mongodb
+        namespace: 5g
+        annotations:
+          checksum/config: "{{ lookup('file', role_path ~ '/../../configs/mongodb.conf') | checksum }}"
+          checksum/scripts: "{{ lookup('file', role_path ~ '/../../scripts/mongo_webui_init.sh') | checksum }}"
+      spec:
+        replicas: 1
+        selector:
+          matchLabels:
+            app: mongodb
+        template:
+          metadata:
+            labels:
+              app: mongodb
+          spec:
+            nodeSelector:
+              kubernetes.io/hostname: worker
+            containers:
+            - name: mongodb
+              image: jacobbista/comnetsemu-5gc:latest
+              imagePullPolicy: IfNotPresent
+              ports:
+              - containerPort: 3000
+              - containerPort: 27017
+              readinessProbe:
+                tcpSocket:
+                  port: 27017
+                initialDelaySeconds: 5
+                periodSeconds: 5
+                failureThreshold: 30
+              command: ["bash", "/open5gs/install/scripts/mongo_webui_init.sh"]
+              env:
+              - name: COMPONENT_NAME
+                value: "mongo"
+              - name: HEALTH_CHECK_TYPE
+                value: "mongo"
+              volumeMounts:
+              - name: mongodb-data
+                mountPath: /var/lib/mongodb
+              - name: mongodb-config
+                mountPath: /open5gs/install/etc/open5gs
+              - name: nf-scripts
+                mountPath: /open5gs/install/scripts
+              - name: mongodb-logs
+                mountPath: /open5gs/install/var/log/open5gs
+            volumes:
+            - name: mongodb-config
+              configMap:
+                name: mongodb-config
+            - name: nf-scripts
+              configMap:
+                name: nf-scripts
+            - name: mongodb-logs
+              emptyDir: {}
+            - name: mongodb-data
+              emptyDir: {}
+    dest: /tmp/mongodb.yaml
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Deploy MongoDB Service
+  copy:
+    content: |
+      apiVersion: v1
+      kind: Service
+      metadata:
+        name: mongodb
+        namespace: 5g
+      spec:
+        selector:
+          app: mongodb
+        ports:
+        - protocol: TCP
+          port: 3000
+          targetPort: 3000
+          name: webui
+        - protocol: TCP
+          port: 27017
+          targetPort: 27017
+          name: mongodb
+        type: ClusterIP
+    dest: /tmp/mongodb-service.yaml
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Deploy NRF with MongoDB dependency
+  copy:
+    content: |
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: nrf
+        namespace: 5g
+        annotations:
+          checksum/config: "{{ lookup('file', role_path ~ '/../../configs/nrf.yaml') | checksum }}"
+          checksum/scripts: "{{ lookup('file', role_path ~ '/../../scripts/nrf_init.sh') | checksum }}"
+      spec:
+        replicas: 1
+        selector:
+          matchLabels:
+            app: nrf
+        template:
+          metadata:
+            labels:
+              app: nrf
+          spec:
+            terminationGracePeriodSeconds: 5
+            initContainers:
+            - name: init-logdir
+              image: jacobbista/comnetsemu-5gc:latest
+              command: ["bash","-lc","mkdir -p /open5gs/install/var/log/open5gs && touch /open5gs/install/var/log/open5gs/nrf.log"]
+            nodeSelector:
+              kubernetes.io/hostname: worker
+            containers:
+            - name: nrf
+              image: jacobbista/comnetsemu-5gc:latest
+              ports:
+              - containerPort: 7777
+              - containerPort: 9090
+              command: ["bash", "/open5gs/install/scripts/nrf_init.sh"]
+              env:
+              - name: DEBUG_HOLD_ON_FAIL
+                value: "false"
+              readinessProbe:
+                tcpSocket:
+                  port: 7777
+                initialDelaySeconds: 5
+                periodSeconds: 5
+                failureThreshold: 6
+              env:
+              - name: NRF_CONFIG
+                value: "/etc/open5gs/nrf.yaml"
+              - name: DB_URI
+                value: "mongodb://mongodb:27017/open5gs"
+              volumeMounts:
+              - name: nrf-config
+                mountPath: /etc/open5gs
+              - name: nrf-scripts
+                mountPath: /open5gs/install/scripts
+            volumes:
+            - name: nrf-config
+              configMap:
+                name: nrf-config
+            - name: nrf-scripts
+              configMap:
+                name: nf-scripts
+    dest: /tmp/nrf.yaml
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Deploy NRF Service
+  copy:
+    content: |
+      apiVersion: v1
+      kind: Service
+      metadata:
+        name: nrf
+        namespace: 5g
+      spec:
+        selector:
+          app: nrf
+        ports:
+        - protocol: TCP
+          port: 7777
+          targetPort: 7777
+          name: sbi
+        - protocol: TCP
+          port: 9090
+          targetPort: 9090
+          name: metrics
+        type: ClusterIP
+    dest: /tmp/nrf-service.yaml
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Deploy AMF with N2 interface and initialization logic
+  copy:
+    content: |
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: amf
+        namespace: 5g
+        annotations:
+          checksum/config: "{{ lookup('file', role_path ~ '/../../configs/amf.yaml') | checksum }}"
+          checksum/scripts: "{{ lookup('file', role_path ~ '/../../scripts/amf_init.sh') | checksum }}"
+      spec:
+        replicas: 1
+        selector:
+          matchLabels:
+            app: amf
+        template:
+          metadata:
+            labels:
+              app: amf
+            annotations:
+              k8s.v1.cni.cncf.io/networks: |
+                [{"name":"n1-net","interface":"n1","ips":["{{ (amf_n1_ip | default('10.201.0.100')) ~ '/24' }}"]},
+                 {"name":"n2-net","interface":"n2","ips":["{{ (amf_n2_ip | default('10.202.0.100')) ~ '/24' }}"]}]
+          spec:
+            nodeSelector:
+              kubernetes.io/hostname: worker
+            containers:
+            - name: amf
+              image: jacobbista/comnetsemu-5gc:latest
+              ports:
+              - containerPort: 7777
+              - containerPort: 38412
+              - containerPort: 9090
+              env:
+              - name: AMF_CONFIG
+                value: "/etc/open5gs/amf.yaml"
+              - name: DB_URI
+                value: "mongodb://mongodb:27017/open5gs"
+              - name: STATIC_IP
+                value: "10.202.0.100"
+              securityContext:
+                privileged: true
+              command: ["bash", "/open5gs/install/scripts/amf_init.sh"]
+              volumeMounts:
+              - name: amf-config
+                mountPath: /etc/open5gs
+              - name: amf-scripts
+                mountPath: /open5gs/install/scripts
+            volumes:
+            - name: amf-config
+              configMap:
+                name: amf-config
+            - name: amf-scripts
+              configMap:
+                name: nf-scripts
+    dest: /tmp/amf.yaml
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Deploy AMF Service
+  copy:
+    content: |
+      apiVersion: v1
+      kind: Service
+      metadata:
+        name: amf
+        namespace: 5g
+      spec:
+        selector:
+          app: amf
+        ports:
+        - protocol: TCP
+          port: 7777
+          targetPort: 7777
+          name: sbi
+        - protocol: SCTP
+          port: 38412
+          targetPort: 38412
+          name: ngap
+        - protocol: TCP
+          port: 9090
+          targetPort: 9090
+          name: metrics
+        type: ClusterIP
+    dest: /tmp/amf-service.yaml
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Deploy SMF with initialization logic
+  copy:
+    content: |
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: smf
+        namespace: 5g
+        annotations:
+          checksum/config: "{{ lookup('file', role_path ~ '/../../configs/smf.yaml') | checksum }}"
+          checksum/scripts: "{{ lookup('file', role_path ~ '/../../scripts/smf_init.sh') | checksum }}"
+      spec:
+        replicas: 1
+        selector:
+          matchLabels:
+            app: smf
+        template:
+          metadata:
+            labels:
+              app: smf
+            annotations:
+              k8s.v1.cni.cncf.io/networks: |
+                [{"name":"n4-net","interface":"n4","ips":["{{ (smf_n4_ip | default('10.204.0.100')) ~ '/24' }}"]}]
+          spec:
+            nodeSelector:
+              kubernetes.io/hostname: worker
+            containers:
+            - name: smf
+              image: jacobbista/comnetsemu-5gc:latest
+              ports:
+              - containerPort: 7777
+              - containerPort: 8805
+              - containerPort: 9090
+              env:
+              - name: SMF_CONFIG
+                value: "/etc/open5gs/smf.yaml"
+              - name: DB_URI
+                value: "mongodb://mongodb:27017/open5gs"
+              securityContext:
+                privileged: true
+              command: ["bash", "/open5gs/install/scripts/smf_init.sh"]
+              volumeMounts:
+              - name: smf-config
+                mountPath: /etc/open5gs
+              - name: smf-scripts
+                mountPath: /open5gs/install/scripts
+            volumes:
+            - name: smf-config
+              configMap:
+                name: smf-config
+            - name: smf-scripts
+              configMap:
+                name: nf-scripts
+    dest: /tmp/smf.yaml
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Deploy SMF Service
+  copy:
+    content: |
+      apiVersion: v1
+      kind: Service
+      metadata:
+        name: smf
+        namespace: 5g
+      spec:
+        selector:
+          app: smf
+        ports:
+        - protocol: TCP
+          port: 7777
+          targetPort: 7777
+          name: sbi
+        - protocol: TCP
+          port: 9090
+          targetPort: 9090
+          name: metrics
+        type: ClusterIP
+    dest: /tmp/smf-service.yaml
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Deploy UPF Edge Service
+  copy:
+    content: |
+      apiVersion: v1
+      kind: Service
+      metadata:
+        name: upf-edge
+        namespace: 5g
+      spec:
+        selector:
+          app: upf-edge
+        ports:
+        - protocol: UDP
+          port: 2152
+          targetPort: 2152
+          name: gtpu
+        - protocol: UDP
+          port: 8805
+          targetPort: 8805
+          name: pfcp
+        - protocol: TCP
+          port: 9090
+          targetPort: 9090
+          name: metrics
+        type: ClusterIP
+    dest: /tmp/upf-edge-service.yaml
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Deploy UPF Edge with N3 and N6-MEC interfaces
+  copy:
+    content: |
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: upf-edge
+        namespace: 5g
+        annotations:
+          checksum/config: "{{ lookup('file', role_path ~ '/../../configs/upf_edge.yaml') | checksum }}"
+          checksum/scripts: "{{ lookup('file', role_path ~ '/../../scripts/upf_edge_init.sh') | checksum }}"
+      spec:
+        replicas: 1
+        selector:
+          matchLabels:
+            app: upf-edge
+        template:
+          metadata:
+            labels:
+              app: upf-edge
+            annotations:
+              k8s.v1.cni.cncf.io/networks: |
+                [{"name":"n3-net","interface":"n3","ips":["{{ (upf_edge_n3_ip | default('10.203.0.100')) ~ '/24' }}"]},
+                 {"name":"n4-net","interface":"n4","ips":["{{ (upf_edge_n4_ip | default('10.204.0.101')) ~ '/24' }}"]},
+                 {"name":"n6-mec-net","namespace":"mec","interface":"n6"}]
+          spec:
+            nodeSelector:
+              kubernetes.io/hostname: edge
+            containers:
+            - name: upf
+              image: jacobbista/comnetsemu-5gc:latest
+              ports:
+              - containerPort: 2152
+              - containerPort: 8805
+              - containerPort: 9090
+              securityContext:
+                privileged: true
+              command: ["bash", "/open5gs/install/scripts/upf_edge_init.sh"]
+              volumeMounts:
+              - name: upf-config
+                mountPath: /etc/open5gs
+              - name: upf-scripts
+                mountPath: /open5gs/install/scripts
+            volumes:
+            - name: upf-config
+              configMap:
+                name: upf-edge-config
+            - name: upf-scripts
+              configMap:
+                name: nf-scripts
+    dest: /tmp/upf-edge.yaml
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Deploy UPF Cloud Service
+  copy:
+    content: |
+      apiVersion: v1
+      kind: Service
+      metadata:
+        name: upf-cloud
+        namespace: 5g
+      spec:
+        selector:
+          app: upf-cloud
+        ports:
+        - protocol: UDP
+          port: 2152
+          targetPort: 2152
+          name: gtpu
+        - protocol: UDP
+          port: 8805
+          targetPort: 8805
+          name: pfcp
+        - protocol: TCP
+          port: 9090
+          targetPort: 9090
+          name: metrics
+        type: ClusterIP
+    dest: /tmp/upf-cloud-service.yaml
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Deploy UPF Cloud with N3 and N6-Cloud interfaces
+  copy:
+    content: |
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: upf-cloud
+        namespace: 5g
+        annotations:
+          checksum/config: "{{ lookup('file', role_path ~ '/../../configs/upf_cloud.yaml') | checksum }}"
+          checksum/scripts: "{{ lookup('file', role_path ~ '/../../scripts/upf_init.sh') | checksum }}"
+      spec:
+        replicas: 1
+        selector:
+          matchLabels:
+            app: upf-cloud
+        template:
+          metadata:
+            labels:
+              app: upf-cloud
+            annotations:
+              k8s.v1.cni.cncf.io/networks: |
+                [{"name":"n3-net","interface":"n3","ips":["{{ (upf_cloud_n3_ip | default('10.203.0.101')) ~ '/24' }}"]},
+                 {"name":"n4-net","interface":"n4","ips":["{{ (upf_cloud_n4_ip | default('10.204.0.102')) ~ '/24' }}"]},
+                 {"name":"n6-cld-net","interface":"n6"}]
+          spec:
+            nodeSelector:
+              kubernetes.io/hostname: worker
+            containers:
+            - name: upf
+              image: jacobbista/comnetsemu-5gc:latest
+              ports:
+              - containerPort: 2152
+              - containerPort: 8805
+              - containerPort: 9090
+              securityContext:
+                privileged: true
+              command: ["bash", "/open5gs/install/scripts/upf_init.sh"]
+              volumeMounts:
+              - name: upf-config
+                mountPath: /etc/open5gs
+              - name: upf-scripts
+                mountPath: /open5gs/install/scripts
+            volumes:
+            - name: upf-config
+              configMap:
+                name: upf-cloud-config
+            - name: upf-scripts
+              configMap:
+                name: nf-scripts
+    dest: /tmp/upf-cloud.yaml
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Deploy UDM Service
+  copy:
+    content: |
+      apiVersion: v1
+      kind: Service
+      metadata:
+        name: udm
+        namespace: 5g
+      spec:
+        selector:
+          app: udm
+        ports:
+        - protocol: TCP
+          port: 7777
+          targetPort: 7777
+          name: sbi
+        - protocol: TCP
+          port: 9090
+          targetPort: 9090
+          name: metrics
+        type: ClusterIP
+    dest: /tmp/udm-service.yaml
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Deploy UDM with initialization logic
+  copy:
+    content: |
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: udm
+        namespace: 5g
+        annotations:
+          checksum/config: "{{ lookup('file', role_path ~ '/../../configs/udm.yaml') | checksum }}"
+          checksum/scripts: "{{ lookup('file', role_path ~ '/../../scripts/udm_init.sh') | checksum }}"
+      spec:
+        replicas: 1
+        selector:
+          matchLabels:
+            app: udm
+        template:
+          metadata:
+            labels:
+              app: udm
+          spec:
+            nodeSelector:
+              kubernetes.io/hostname: worker
+            containers:
+            - name: udm
+              image: jacobbista/comnetsemu-5gc:latest
+              ports:
+              - containerPort: 7777
+              - containerPort: 9090
+              env:
+              - name: UDM_CONFIG
+                value: "/etc/open5gs/udm.yaml"
+              - name: DB_URI
+                value: "mongodb://mongodb:27017/open5gs"
+              command: ["bash", "/open5gs/install/scripts/udm_init.sh"]
+              volumeMounts:
+              - name: udm-config
+                mountPath: /etc/open5gs
+              - name: udm-scripts
+                mountPath: /open5gs/install/scripts
+            volumes:
+            - name: udm-config
+              configMap:
+                name: {{ udm_configmap_name | default('udm-config') }}
+            - name: udm-scripts
+              configMap:
+                name: nf-scripts
+    dest: /tmp/udm.yaml
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Deploy UDR Service
+  copy:
+    content: |
+      apiVersion: v1
+      kind: Service
+      metadata:
+        name: udr
+        namespace: 5g
+      spec:
+        selector:
+          app: udr
+        ports:
+        - protocol: TCP
+          port: 7777
+          targetPort: 7777
+          name: sbi
+        - protocol: TCP
+          port: 9090
+          targetPort: 9090
+          name: metrics
+        type: ClusterIP
+    dest: /tmp/udr-service.yaml
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Deploy UDR with initialization logic
+  copy:
+    content: |
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: udr
+        namespace: 5g
+        annotations:
+          checksum/config: "{{ lookup('file', role_path ~ '/../../configs/udr.yaml') | checksum }}"
+          checksum/scripts: "{{ lookup('file', role_path ~ '/../../scripts/udr_init.sh') | checksum }}"
+      spec:
+        replicas: 1
+        selector:
+          matchLabels:
+            app: udr
+        template:
+          metadata:
+            labels:
+              app: udr
+          spec:
+            nodeSelector:
+              kubernetes.io/hostname: worker
+            containers:
+            - name: udr
+              image: jacobbista/comnetsemu-5gc:latest
+              ports:
+              - containerPort: 7777
+              - containerPort: 9090
+              env:
+              - name: UDR_CONFIG
+                value: "/etc/open5gs/udr.yaml"
+              - name: DB_URI
+                value: "mongodb://mongodb:27017/open5gs"
+              command: ["bash", "/open5gs/install/scripts/udr_init.sh"]
+              volumeMounts:
+              - name: udr-config
+                mountPath: /etc/open5gs
+              - name: udr-scripts
+                mountPath: /open5gs/install/scripts
+            volumes:
+            - name: udr-config
+              configMap:
+                name: {{ udr_configmap_name | default('udr-config') }}
+            - name: udr-scripts
+              configMap:
+                name: nf-scripts
+    dest: /tmp/udr.yaml
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Deploy PCF Service
+  copy:
+    content: |
+      apiVersion: v1
+      kind: Service
+      metadata:
+        name: pcf
+        namespace: 5g
+      spec:
+        selector:
+          app: pcf
+        ports:
+        - protocol: TCP
+          port: 7777
+          targetPort: 7777
+          name: sbi
+        - protocol: TCP
+          port: 9090
+          targetPort: 9090
+          name: metrics
+        type: ClusterIP
+    dest: /tmp/pcf-service.yaml
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Deploy PCF with initialization logic
+  copy:
+    content: |
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: pcf
+        namespace: 5g
+        annotations:
+          checksum/config: "{{ lookup('file', role_path ~ '/../../configs/pcf.yaml') | checksum }}"
+          checksum/scripts: "{{ lookup('file', role_path ~ '/../../scripts/pcf_init.sh') | checksum }}"
+      spec:
+        replicas: 1
+        selector:
+          matchLabels:
+            app: pcf
+        template:
+          metadata:
+            labels:
+              app: pcf
+          spec:
+            nodeSelector:
+              kubernetes.io/hostname: worker
+            containers:
+            - name: pcf
+              image: jacobbista/comnetsemu-5gc:latest
+              ports:
+              - containerPort: 7777
+              - containerPort: 9090
+              env:
+              - name: PCF_CONFIG
+                value: "/etc/open5gs/pcf.yaml"
+              - name: DB_URI
+                value: "mongodb://mongodb:27017/open5gs"
+              command: ["bash", "/open5gs/install/scripts/pcf_init.sh"]
+              volumeMounts:
+              - name: pcf-config
+                mountPath: /etc/open5gs
+              - name: pcf-scripts
+                mountPath: /open5gs/install/scripts
+            volumes:
+            - name: pcf-config
+              configMap:
+                name: {{ pcf_configmap_name | default('pcf-config') }}
+            - name: pcf-scripts
+              configMap:
+                name: nf-scripts
+    dest: /tmp/pcf.yaml
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Deploy BSF Service
+  copy:
+    content: |
+      apiVersion: v1
+      kind: Service
+      metadata:
+        name: bsf
+        namespace: 5g
+      spec:
+        selector:
+          app: bsf
+        ports:
+        - protocol: TCP
+          port: 7777
+          targetPort: 7777
+          name: sbi
+        - protocol: TCP
+          port: 9090
+          targetPort: 9090
+          name: metrics
+        type: ClusterIP
+    dest: /tmp/bsf-service.yaml
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Deploy BSF with initialization logic
+  copy:
+    content: |
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: bsf
+        namespace: 5g
+        annotations:
+          checksum/config: "{{ lookup('file', role_path ~ '/../../configs/bsf.yaml') | checksum }}"
+          checksum/scripts: "{{ lookup('file', role_path ~ '/../../scripts/bsf_init.sh') | checksum }}"
+      spec:
+        replicas: 1
+        selector:
+          matchLabels:
+            app: bsf
+        template:
+          metadata:
+            labels:
+              app: bsf
+          spec:
+            nodeSelector:
+              kubernetes.io/hostname: worker
+            containers:
+            - name: bsf
+              image: jacobbista/comnetsemu-5gc:latest
+              ports:
+              - containerPort: 7777
+              - containerPort: 9090
+              env:
+              - name: BSF_CONFIG
+                value: "/etc/open5gs/bsf.yaml"
+              - name: DB_URI
+                value: "mongodb://mongodb:27017/open5gs"
+              command: ["bash", "/open5gs/install/scripts/bsf_init.sh"]
+              volumeMounts:
+              - name: bsf-config
+                mountPath: /etc/open5gs
+              - name: bsf-scripts
+                mountPath: /open5gs/install/scripts
+            volumes:
+            - name: bsf-config
+              configMap:
+                name: {{ bsf_configmap_name | default('bsf-config') }}
+            - name: bsf-scripts
+              configMap:
+                name: nf-scripts
+    dest: /tmp/bsf.yaml
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Deploy NSSF Service
+  copy:
+    content: |
+      apiVersion: v1
+      kind: Service
+      metadata:
+        name: nssf
+        namespace: 5g
+      spec:
+        selector:
+          app: nssf
+        ports:
+        - protocol: TCP
+          port: 7777
+          targetPort: 7777
+          name: sbi
+        - protocol: TCP
+          port: 9090
+          targetPort: 9090
+          name: metrics
+        type: ClusterIP
+    dest: /tmp/nssf-service.yaml
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Deploy NSSF with initialization logic
+  copy:
+    content: |
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: nssf
+        namespace: 5g
+        annotations:
+          checksum/config: "{{ lookup('file', role_path ~ '/../../configs/nssf.yaml') | checksum }}"
+          checksum/scripts: "{{ lookup('file', role_path ~ '/../../scripts/nssf_init.sh') | checksum }}"
+      spec:
+        replicas: 1
+        selector:
+          matchLabels:
+            app: nssf
+        template:
+          metadata:
+            labels:
+              app: nssf
+          spec:
+            nodeSelector:
+              kubernetes.io/hostname: worker
+            containers:
+            - name: nssf
+              image: jacobbista/comnetsemu-5gc:latest
+              ports:
+              - containerPort: 7777
+              env:
+              - name: NSSF_CONFIG
+                value: "/etc/open5gs/nssf.yaml"
+              - name: DB_URI
+                value: "mongodb://mongodb:27017/open5gs"
+              command: ["bash", "/open5gs/install/scripts/nssf_init.sh"]
+              volumeMounts:
+              - name: nssf-config
+                mountPath: /etc/open5gs
+              - name: nssf-scripts
+                mountPath: /open5gs/install/scripts
+            volumes:
+            - name: nssf-config
+              configMap:
+                name: {{ nssf_configmap_name | default('nssf-config') }}
+            - name: nssf-scripts
+              configMap:
+                name: nf-scripts
+    dest: /tmp/nssf.yaml
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Deploy AUSF Service
+  copy:
+    content: |
+      apiVersion: v1
+      kind: Service
+      metadata:
+        name: ausf
+        namespace: 5g
+      spec:
+        selector:
+          app: ausf
+        ports:
+        - protocol: TCP
+          port: 7777
+          targetPort: 7777
+          name: sbi
+        - protocol: TCP
+          port: 9090
+          targetPort: 9090
+          name: metrics
+        type: ClusterIP
+    dest: /tmp/ausf-service.yaml
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Deploy AUSF with initialization logic
+  copy:
+    content: |
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: ausf
+        namespace: 5g
+        annotations:
+          checksum/config: "{{ lookup('file', role_path ~ '/../../configs/ausf.yaml') | checksum }}"
+          checksum/scripts: "{{ lookup('file', role_path ~ '/../../scripts/ausf_init.sh') | checksum }}"
+      spec:
+        replicas: 1
+        selector:
+          matchLabels:
+            app: ausf
+        template:
+          metadata:
+            labels:
+              app: ausf
+          spec:
+            nodeSelector:
+              kubernetes.io/hostname: worker
+            containers:
+            - name: ausf
+              image: jacobbista/comnetsemu-5gc:latest
+              ports:
+              - containerPort: 7777
+              - containerPort: 9090
+              env:
+              - name: AUSF_CONFIG
+                value: "/etc/open5gs/ausf.yaml"
+              - name: DB_URI
+                value: "mongodb://mongodb:27017/open5gs"
+              command: ["bash", "/open5gs/install/scripts/ausf_init.sh"]
+              volumeMounts:
+              - name: ausf-config
+                mountPath: /etc/open5gs
+              - name: ausf-scripts
+                mountPath: /open5gs/install/scripts
+            volumes:
+            - name: ausf-config
+              configMap:
+                name: {{ ausf_configmap_name | default('ausf-config') }}
+            - name: ausf-scripts
+              configMap:
+                name: nf-scripts
+    dest: /tmp/ausf.yaml
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Apply 5G core manifests via Kubernetes API
+  kubernetes.core.k8s:
+    state: present
+    kubeconfig: "/home/vagrant/kubeconfig"
+    src: "{{ item }}"
+  loop:
+    - /tmp/mongodb.yaml
+    - /tmp/mongodb-service.yaml
+    - /tmp/nrf.yaml
+    - /tmp/nrf-service.yaml
+    - /tmp/amf.yaml
+    - /tmp/amf-service.yaml
+    - /tmp/smf.yaml
+    - /tmp/smf-service.yaml
+    - /tmp/upf-edge.yaml
+    - /tmp/upf-edge-service.yaml
+    - /tmp/upf-cloud.yaml
+    - /tmp/upf-cloud-service.yaml
+    - /tmp/udm.yaml
+    - /tmp/udm-service.yaml
+    - /tmp/udr.yaml
+    - /tmp/udr-service.yaml
+    - /tmp/pcf.yaml
+    - /tmp/pcf-service.yaml
+    - /tmp/bsf.yaml
+    - /tmp/bsf-service.yaml
+    - /tmp/nssf.yaml
+    - /tmp/nssf-service.yaml
+    - /tmp/ausf.yaml
+    - /tmp/ausf-service.yaml
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Wait for MongoDB Ready (longer, with diagnostics)
+  shell: |
+    set -e
+    echo "⏳ Waiting for deployment/mongodb to be Available (timeout: 60s)..."
+    if ! kubectl wait --for=condition=available deployment/mongodb -n 5g --timeout=60s; then
+      echo "❌ deployment/mongodb not available";
+      kubectl describe deployment/mongodb -n 5g || true;
+      POD=$(kubectl get pods -n 5g -l app=mongodb -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true);
+      [ -n "$POD" ] && kubectl describe pod "$POD" -n 5g || true;
+      exit 1;
+    fi
+    echo "✅ deployment/mongodb Available"
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Wait for remaining 5G core deployments to be Available
+  shell: |
+    set -e
+    for d in nrf amf smf pcf bsf udm udr nssf ausf upf-edge upf-cloud; do
+      echo "⏳ Waiting for deployment/$d (60s)..."
+      kubectl wait --for=condition=available deployment/$d -n 5g --timeout=60s || {
+        echo "❌ deployment/$d not available"; kubectl describe deployment/$d -n 5g || true; exit 1;
+      }
+      echo "✅ deployment/$d Available"
+    done
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+ 
+
+- name: Display deployment status
+  shell: |
+    echo "🚀 =========================================="
+    echo "📊 5G CORE DEPLOYMENT STATUS"
+    echo "🚀 =========================================="
+    echo ""
+    echo "📋 Pod Status Overview:"
+    kubectl get pods -n 5g -o custom-columns="NAME:.metadata.name,STATUS:.status.phase,NODE:.spec.nodeName,READY:.status.containerStatuses[0].ready" --no-headers | while read line; do
+      echo "   $line"
+    done
+    echo ""
+    echo "🌐 Service Endpoints:"
+    kubectl get svc -n 5g -o custom-columns="NAME:.metadata.name,TYPE:.spec.type,CLUSTER-IP:.spec.clusterIP,PORT:.spec.ports[0].port" --no-headers | while read line; do
+      echo "   $line"
+    done
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+  register: pods_status
+
+- name: Show formatted deployment status
+  debug:
+    msg: "{{ pods_status.stdout_lines }}"
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Show detailed pod information for debugging
+  shell: |
+    echo "=== Detailed Pod Information ==="
+    for pod in $(kubectl get pods -n 5g -o jsonpath='{.items[*].metadata.name}'); do
+      echo "--- Pod: $pod ---"
+      kubectl describe pod $pod -n 5g | grep -E "(Status:|Events:|Conditions:)" -A 5
+      echo ""
+    done
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+  register: detailed_pod_info
+  failed_when: false
+
+- name: Display detailed pod information
+  debug:
+    msg: "{{ detailed_pod_info.stdout_lines }}"
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true

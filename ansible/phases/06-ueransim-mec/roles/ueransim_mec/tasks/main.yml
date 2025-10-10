@@ -1,0 +1,593 @@
+---
+# UERANSIM + MEC setup (no comnetsemu dependency)
+
+- name: Ensure SCTP kernel module loaded on worker and edge
+  shell: |
+    modprobe sctp || true
+    echo sctp > /etc/modules-load.d/sctp.conf || true
+  delegate_to: "{{ item }}"
+  loop:
+    - "{{ groups['workers'][0] }}"
+    - "{{ groups['edges'][0] }}"
+  run_once: true
+
+- name: Pre-pull UERANSIM image on worker
+  shell: crictl pull docker.io/jacobbista/comnetsemu-ueransim:latest || true
+  delegate_to: "{{ groups['workers'][0] }}"
+  run_once: true
+
+- name: Pre-pull UERANSIM image on edge
+  shell: crictl pull docker.io/jacobbista/comnetsemu-ueransim:latest || true
+  delegate_to: "{{ groups['edges'][0] }}"
+  run_once: true
+
+- name: Discover AMF N2 IP from running pod
+  shell: |
+    set -e
+    POD=$(kubectl -n 5g get pod -l app=amf -o jsonpath='{.items[0].metadata.name}')
+    kubectl -n 5g exec "$POD" -- sh -lc "ip -4 -o addr show dev n2 | awk '{print \$4}' | cut -d/ -f1 | head -n1 | tr -d '\r'"
+  register: amf_n2_ip_discovered
+  changed_when: false
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Select AMF N2 IP (prefer inventory)
+  set_fact:
+    amf_addr: "{{ hostvars[groups['masters'][0]].amf_n2_ip | default(amf_n2_ip_discovered.stdout | trim) }}"
+
+- name: Render gNB config with AMF N2 IP
+  block:
+    - name: Copy base gNB config to master
+      copy:
+        src: "{{ role_path }}/../../configs/gnb.yaml"
+        dest: /tmp/gnb_cfg.yaml
+        mode: '0644'
+      delegate_to: "{{ groups['masters'][0] }}"
+
+    - name: Replace AMF address in gNB config with AMF N2 IP (prefer inventory)
+      lineinfile:
+        path: /tmp/gnb_cfg.yaml
+        regexp: '^([[:space:]]*-\s*address:\s*).*$'
+        line: '  - address: {{ amf_addr }}'
+        backrefs: yes
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Get gNB config checksum
+  stat:
+    path: /tmp/gnb_cfg.yaml
+  register: gnb_config_stat
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Read rendered gNB config from master
+  slurp:
+    src: /tmp/gnb_cfg.yaml
+  register: gnb_cfg_slurp
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Apply gNB ConfigMap via Kubernetes API (checksum)
+  kubernetes.core.k8s:
+    state: present
+    kubeconfig: "/home/vagrant/kubeconfig"
+    definition:
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: "gnb-config-{{ gnb_config_stat.stat.checksum }}"
+        namespace: 5g
+      data:
+        gnb.yaml: "{{ gnb_cfg_slurp.content | b64decode }}"
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Create temp UE config file on master (Phase 06)
+  copy:
+    src: "{{ role_path }}/../../configs/ue.yaml"
+    dest: /tmp/ue_cfg.yaml
+    mode: '0644'
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Get UE config checksum
+  stat:
+    path: /tmp/ue_cfg.yaml
+  register: ue_config_stat
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Read UE config from master
+  slurp:
+    src: /tmp/ue_cfg.yaml
+  register: ue_cfg_slurp
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Apply UE ConfigMap via Kubernetes API (checksum)
+  kubernetes.core.k8s:
+    state: present
+    kubeconfig: "/home/vagrant/kubeconfig"
+    definition:
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: "ue-config-{{ ue_config_stat.stat.checksum }}"
+        namespace: 5g
+      data:
+        ue.yaml: "{{ ue_cfg_slurp.content | b64decode }}"
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+# (Removed script ConfigMap; we start binaries directly)
+- name: Copy UERANSIM scripts to master
+  copy:
+    src: "{{ role_path }}/../../scripts/"
+    dest: /tmp/ueransim-scripts/
+    mode: '0755'
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Get checksum of gnb_init.sh
+  stat:
+    path: /tmp/ueransim-scripts/gnb_init.sh
+  register: gnb_script_stat
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Get checksum of ue_init.sh  
+  stat:
+    path: /tmp/ueransim-scripts/ue_init.sh
+  register: ue_script_stat
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Build UERANSIM scripts data map
+  set_fact:
+    ueransim_scripts_data: {}
+
+- name: Read UERANSIM scripts into data map
+  set_fact:
+    ueransim_scripts_data: "{{ ueransim_scripts_data | combine({ (item | basename): lookup('file', item) }) }}"
+  loop: "{{ lookup('fileglob', role_path + '/../../scripts/*', wantlist=True) }}"
+
+- name: Apply UERANSIM scripts ConfigMap via API (checksum in name)
+  kubernetes.core.k8s:
+    state: present
+    kubeconfig: "/home/vagrant/kubeconfig"
+    definition:
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: "ueransim-scripts-{{ gnb_script_stat.stat.checksum }}-{{ ue_script_stat.stat.checksum }}"
+        namespace: 5g
+      data: "{{ ueransim_scripts_data }}"
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Set ConfigMap names with checksums
+  set_fact:
+    gnb_configmap_name: "gnb-config-{{ gnb_config_stat.stat.checksum }}"
+    ue_configmap_name: "ue-config-{{ ue_config_stat.stat.checksum }}"
+    scripts_configmap_name: "ueransim-scripts-{{ gnb_script_stat.stat.checksum }}-{{ ue_script_stat.stat.checksum }}"
+  run_once: true
+
+- name: Create UERANSIM deployments manifest (gNB, UE)
+  copy:
+    dest: /tmp/ueransim-deployments.yaml
+    content: |
+      # UERANSIM gNB deployment with N2 and N3 interfaces
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: gnb
+        namespace: 5g
+      spec:
+        replicas: 1
+        selector:
+          matchLabels:
+            app: gnb
+        template:
+          metadata:
+            labels:
+              app: gnb
+            annotations:
+              k8s.v1.cni.cncf.io/networks: |
+                [{"name":"n2-net","interface":"n2"},{"name":"n3-net","interface":"n3"}]
+          spec:
+            nodeSelector:
+              kubernetes.io/hostname: edge
+            containers:
+            - name: gnb
+              image: jacobbista/comnetsemu-ueransim:latest
+              securityContext:
+                privileged: true
+              command: ["/usr/local/bin/ueransim/gnb_init.sh"]
+              workingDir: /UERANSIM/build
+              volumeMounts:
+              - name: gnb-config
+                mountPath: /etc/ueransim
+              - name: ueransim-scripts
+                mountPath: /usr/local/bin/ueransim
+              - name: ueransim-log
+                mountPath: /mnt/log
+              - name: gnb-config
+                mountPath: /mnt/ueransim
+            volumes:
+            - name: gnb-config
+              configMap:
+                name: "{{ gnb_configmap_name }}"
+            - name: ueransim-scripts
+              configMap:
+                name: "{{ scripts_configmap_name }}"
+                defaultMode: 0755
+            - name: ueransim-log
+              emptyDir: {}
+      ---
+      # UERANSIM UE deployment with N3 interface
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: ue
+        namespace: 5g
+      spec:
+        replicas: 1
+        selector:
+          matchLabels:
+            app: ue
+        template:
+          metadata:
+            labels:
+              app: ue
+            annotations:
+              k8s.v1.cni.cncf.io/networks: |
+                [{"name":"n1-net","interface":"n1"},{"name":"n3-net","interface":"n3"}]
+          spec:
+            nodeSelector:
+              kubernetes.io/hostname: edge
+            containers:
+            - name: ue
+              image: jacobbista/comnetsemu-ueransim:latest
+              securityContext:
+                privileged: true
+              command: ["/usr/local/bin/ueransim/ue_init.sh"]
+              workingDir: /UERANSIM/build
+              volumeMounts:
+              - name: ue-config
+                mountPath: /etc/ueransim
+              - name: ueransim-scripts
+                mountPath: /usr/local/bin/ueransim
+              - name: ueransim-log
+                mountPath: /mnt/log
+              - name: ue-config
+                mountPath: /mnt/ueransim
+            volumes:
+            - name: ue-config
+              configMap:
+                name: "{{ ue_configmap_name }}"
+            - name: ueransim-scripts
+              configMap:
+                name: "{{ scripts_configmap_name }}"
+                defaultMode: 0755
+            - name: ueransim-log
+              emptyDir: {}
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Create UERANSIM services manifest (gNB, UE)
+  copy:
+    dest: /tmp/ueransim-services.yaml
+    content: |
+      # gNB Service (NGAP via SCTP and optional GTP-U port exposure if needed)
+      apiVersion: v1
+      kind: Service
+      metadata:
+        name: gnb
+        namespace: 5g
+      spec:
+        selector:
+          app: gnb
+        ports:
+        - protocol: SCTP
+          port: 38412
+          targetPort: 38412
+          name: ngap
+        - protocol: UDP
+          port: 4997
+          targetPort: 4997
+          name: radio
+        type: ClusterIP
+      ---
+      # UE Service (optional demo HTTP)
+      apiVersion: v1
+      kind: Service
+      metadata:
+        name: ue
+        namespace: 5g
+      spec:
+        selector:
+          app: ue
+        ports:
+        - protocol: TCP
+          port: 8080
+          targetPort: 8080
+          name: http
+        type: ClusterIP
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Check for existing UERANSIM deployments
+  shell: |
+    echo "🔍 Checking for existing UERANSIM deployments..."
+    if kubectl -n 5g get deployment gnb ue 2>/dev/null | grep -q "gnb\|ue"; then
+      echo "EXISTING_DEPLOYMENTS_FOUND"
+    else
+      echo "NO_EXISTING_DEPLOYMENTS"
+    fi
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+  register: existing_deployments_check
+
+- name: Scale down existing UERANSIM deployments to 0
+  when: "'EXISTING_DEPLOYMENTS_FOUND' in existing_deployments_check.stdout"
+  shell: |
+    echo "🔄 Scaling down existing UERANSIM deployments..."
+    kubectl -n 5g scale deployment gnb --replicas=0 || true
+    kubectl -n 5g scale deployment ue --replicas=0 || true
+    echo "✅ Deployments scaled to 0"
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Wait for pods to terminate naturally (30s)
+  when: "'EXISTING_DEPLOYMENTS_FOUND' in existing_deployments_check.stdout"
+  shell: |
+    echo "⏳ Waiting for pods to terminate naturally (30s)..."
+    sleep 30
+    echo "✅ Natural termination wait completed"
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Check if any pods are still running
+  when: "'EXISTING_DEPLOYMENTS_FOUND' in existing_deployments_check.stdout"
+  shell: |
+    echo "🔍 Checking for remaining pods..."
+    REMAINING_PODS=$(kubectl -n 5g get pods -l "app=gnb,app=ue" --no-headers 2>/dev/null | wc -l)
+    if [ "$REMAINING_PODS" -gt 0 ]; then
+      echo "FORCE_TERMINATION_NEEDED"
+      kubectl -n 5g get pods -l "app=gnb,app=ue" || true
+    else
+      echo "ALL_PODS_TERMINATED"
+    fi
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+  register: pods_termination_check
+
+- name: Force delete remaining pods
+  when: "'EXISTING_DEPLOYMENTS_FOUND' in existing_deployments_check.stdout and 'FORCE_TERMINATION_NEEDED' in pods_termination_check.stdout "
+  shell: |
+    echo "💥 Force deleting remaining pods..."
+    kubectl -n 5g delete pods -l "app=gnb,app=ue" --force --grace-period=0 || true
+    echo "✅ Force deletion completed"
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Wait additional 30s after force termination
+  when: "'EXISTING_DEPLOYMENTS_FOUND' in existing_deployments_check.stdout and 'FORCE_TERMINATION_NEEDED' in pods_termination_check.stdout"
+  shell: |
+    echo "⏳ Waiting additional 30s after force termination..."
+    sleep 30
+    echo "✅ Additional wait completed"
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Verify all pods are terminated
+  when: "'EXISTING_DEPLOYMENTS_FOUND' in existing_deployments_check.stdout"
+  shell: |
+    echo "🔍 Final verification - checking for any remaining pods..."
+    REMAINING_PODS=$(kubectl -n 5g get pods -l "app=gnb,app=ue" --no-headers 2>/dev/null | wc -l)
+    if [ "$REMAINING_PODS" -gt 0 ]; then
+      echo "❌ CRITICAL: Still have $REMAINING_PODS pods running after cleanup"
+      kubectl -n 5g get pods -l "app=gnb,app=ue" || true
+      exit 1
+    else
+      echo "✅ All pods successfully terminated"
+    fi
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Apply UERANSIM deployments via Kubernetes API
+  kubernetes.core.k8s:
+    state: present
+    kubeconfig: "/home/vagrant/kubeconfig"
+    src: /tmp/ueransim-deployments.yaml
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Apply UERANSIM services via Kubernetes API
+  kubernetes.core.k8s:
+    state: present
+    kubeconfig: "/home/vagrant/kubeconfig"
+    src: /tmp/ueransim-services.yaml
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Wait for gNB deployment to be available
+  kubernetes.core.k8s_info:
+    api_version: apps/v1
+    kind: Deployment
+    name: gnb
+    namespace: 5g
+    kubeconfig: "/home/vagrant/kubeconfig"
+  register: gnb_dep
+  until: (gnb_dep.resources | length) > 0 and (gnb_dep.resources[0].status.conditions | selectattr('type','equalto','Available') | selectattr('status','equalto','True') | list | length) > 0
+  retries: 36
+  delay: 5
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Wait for UE deployment to be available (best-effort)
+  kubernetes.core.k8s_info:
+    api_version: apps/v1
+    kind: Deployment
+    name: ue
+    namespace: 5g
+    kubeconfig: "/home/vagrant/kubeconfig"
+  register: ue_dep
+  until: (ue_dep.resources | length) > 0 and (ue_dep.resources[0].status.conditions | selectattr('type','equalto','Available') | selectattr('status','equalto','True') | list | length) > 0
+  retries: 36
+  delay: 5
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+  failed_when: false
+
+# Rollout restart not needed - we do complete cleanup and fresh deployment above
+
+# Basic connectivity checks on N2/N3/N6
+
+- name: Get gNB pod name
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Pod
+    namespace: 5g
+    label_selectors:
+      - app=gnb
+    kubeconfig: "/home/vagrant/kubeconfig"
+  register: gnb_pods
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Wait for gNB pod container to be Ready
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Pod
+    namespace: 5g
+    name: "{{ (gnb_pods.resources | first).metadata.name }}"
+    kubeconfig: "/home/vagrant/kubeconfig"
+  register: gnb_pod_ready
+  until: (
+           gnb_pod_ready.resources | length > 0
+         ) and (
+           (gnb_pod_ready.resources[0].status.phase | default('')) == 'Running'
+         ) and (
+           (gnb_pod_ready.resources[0].status.containerStatuses | default([]) | selectattr('ready','equalto',True) | list | length) > 0
+         )
+  retries: 60
+  delay: 2
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Ping AMF N2 from gNB over interface n2
+  shell: |
+    kubectl -n 5g exec {{ (gnb_pods.resources | first).metadata.name }} -c gnb -- ping -I n2 -c 2 -W 2 {{ amf_addr }}
+  register: ping_n2
+  failed_when: ping_n2.rc != 0
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Get UPF-Edge n3 IP from Multus annotation
+  shell: |
+    kubectl -n 5g get pod -l app=upf-edge -o json | jq -r '.items[0].metadata.annotations["k8s.v1.cni.cncf.io/network-status"] | fromjson | .[] | select(.interface=="n3") | .ips[0]'
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+  register: upfe_n3_ip
+
+- name: Ping UPF-Edge n3 from gNB over interface n3
+  when: upfe_n3_ip.stdout is match('^([0-9]{1,3}\.){3}[0-9]{1,3}$')
+  shell: |
+    kubectl -n 5g exec {{ (gnb_pods.resources | first).metadata.name }} -c gnb -- ping -I n3 -c 2 -W 2 {{ upfe_n3_ip.stdout }}
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+  register: ping_n3
+  failed_when: ping_n3.rc != 0
+
+- name: Curl MEC from UE (after attach, best-effort)
+  shell: |
+    kubectl -n 5g exec deploy/ue -c ue -- sh -lc 'apk add --no-cache curl >/dev/null 2>&1 || true; curl -s --max-time 2 http://mec-server.mec:8080 || true'
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+  changed_when: false
+  failed_when: false
+
+# Optional MEC manifests (guarded by deploy_mec)
+- name: Create MEC deployment manifest
+  when: (deploy_mec | default(false)) | bool
+  copy:
+    dest: /tmp/mec-deployment.yaml
+    content: |
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: mec-server
+        namespace: mec
+      spec:
+        replicas: 1
+        selector:
+          matchLabels:
+            app: mec-server
+        template:
+          metadata:
+            labels:
+              app: mec-server
+            annotations:
+              k8s.v1.cni.cncf.io/networks: |
+                [{"name":"n6-mec-net","interface":"n6"}]
+          spec:
+            nodeSelector:
+              kubernetes.io/hostname: edge
+            containers:
+            - name: mec-server
+              image: jacobbista/comnetsemu-mec:latest
+              ports:
+              - containerPort: 8080
+              command: ["/bin/sh","-c"]
+              args:
+                - |
+                  echo "[MEC][init] Waiting for N6 interface...";
+                  while ! ip addr show n6 | grep -q "inet"; do sleep 1; done;
+                  echo "[MEC][init] Starting MEC server...";
+                  exec /entrypoint
+              volumeMounts:
+              - name: mec-config
+                mountPath: /etc/mec
+            volumes:
+            - name: mec-config
+              configMap:
+                name: mec-config
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Create MEC service manifest
+  when: (deploy_mec | default(false)) | bool
+  copy:
+    dest: /tmp/mec-service.yaml
+    content: |
+      apiVersion: v1
+      kind: Service
+      metadata:
+        name: mec-server
+        namespace: mec
+      spec:
+        selector:
+          app: mec-server
+        ports:
+        - protocol: TCP
+          port: 8080
+          targetPort: 8080
+          name: http
+        type: ClusterIP
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Apply MEC deployment
+  when: (deploy_mec | default(false)) | bool
+  shell: kubectl apply -f /tmp/mec-deployment.yaml
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Apply MEC service
+  when: (deploy_mec | default(false)) | bool
+  shell: kubectl apply -f /tmp/mec-service.yaml
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+

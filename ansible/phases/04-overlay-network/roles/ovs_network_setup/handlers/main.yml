@@ -1,0 +1,5 @@
+---
+- name: restart openvswitch-switch
+  systemd:
+    name: openvswitch-switch
+    state: restarted

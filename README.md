@@ -1,134 +1,179 @@
-# Healthcare 5G Testbed con Kubernetes e KubeEdge
+# 5G K3s KubeEdge Testbed
 
-Testbed completo per simulare un ambiente sanitario 5G con orchestrazione edge intelligente tramite KubeEdge e core network Open5GS.
+A comprehensive 5G testbed for research and testing, featuring cloud-edge distribution with K3s, KubeEdge, and Open5GS. This testbed provides a complete 5G infrastructure simulation suitable for edge computing research, MEC applications, and network function testing.
 
-## 🏥 Scenario del Progetto
+## What you get
 
-Il testbed simula un ospedale intelligente con:
-- **Core Network 5G**: Open5GS per gestione UE, autenticazione e routing
-- **Edge Computing**: KubeEdge per orchestrazione intelligente dei servizi edge
-- **Dispositivi IoT Medici**: Simulazione di monitor cardiaci, ventilatori, defibrillatori
-- **Gestione Autonoma del Carico**: KubeEdge trasferisce automaticamente i container in base al carico
-- **Metriche e Monitoraggio**: Dashboard per visualizzare performance e latenza
+- **K3s cluster** (1 master/control-plane, 1 worker, 1 edge)
+- **KubeEdge** (CloudCore on worker, EdgeCore on edge) for cloud↔edge orchestration
+- **Overlay data-plane** with OVS bridges and VXLAN tunnels between worker↔edge
+- **Multus CNI** with NetworkAttachmentDefinitions for 5G interfaces (N1/N2/N3/N4/N6e/N6c)
+- **Open5GS-based 5G Core** (NRF/AMF/SMF/UPF/UDM/UDR/PCF/BSF/NSSF/AUSF)
+- **UERANSIM** (gNB/UE simulator) and MEC applications
+- **Complete automation** with Vagrant + Ansible for reproducible deployments
 
-## 🚀 Avvio Rapido
+## Topology (at a glance)
+
+```
+┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
+│   Master Node   │    │   Worker Node   │    │    Edge Node    │
+│  (control-plane)│    │ (datacenter)    │    │     (edge)      │
+│ • K3s Server    │    │ • K3s Agent     │    │ • K3s Agent     │
+│                 │    │ • CloudCore     │    │ • EdgeCore      │
+│                 │    │ • OVS + Multus  │    │ • OVS + Multus  │
+└─────────────────┘    └─────────────────┘    └─────────────────┘
+                 VXLAN tunnels (N1/N2/N3/N4/N6) between worker and edge
+```
+
+## Prerequisites
+
+- Vagrant ≥ 2.3.0
+- VirtualBox ≥ 6.1.0
+- Host OS: Linux/macOS/Windows with virtualization enabled
+
+## Quick start
 
 ```bash
-# Clona e avvia tutto con un comando
-git clone <repository>
+git clone <repository-url>
 cd 5g-k8s-testbed-vagrant-ansible-fullautodeploy
 vagrant up
 ```
 
-Il provisioning automatico:
-1. Crea 4 VM Ubuntu 22.04
-2. Configura il cluster Kubernetes con KubeEdge
-3. Installa Open5GS con persistent volumes
-4. Configura OVS-CNI per interfacce N1/N2/N3
-5. Deploya servizi IoT medici simulati
-6. Avvia test di carico automatici
+Vagrant provisions 4 VMs: `master`, `worker`, `edge`, `ansible`. The Ansible VM drives all phases via the main playbook.
 
-## 🏗️ Architettura
+## Phased deployment
 
-```
-┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
-│ Ansible         │    │ Kubernetes      │    │ KubeEdge        │
-│ Controller      │    │ Master          │    │ Edge Node       │
-│ 192.168.56.10  │    │ 192.168.56.11   │    │ 192.168.56.13   │
-│                 │    │                 │    │                 │
-│ - Orchestrazione│    │ - API Server    │    │ - Edge Runtime  │
-│ - Playbook      │    │ - etcd          │    │ - Device Twin   │
-│ - Inventory     │    │ - Scheduler     │    │ - IoT Services  │
-└─────────────────┘    └─────────────────┘    └─────────────────┘
-                                │
-                                │
-                       ┌─────────────────┐
-                       │ Kubernetes      │
-                       │ Worker          │
-                       │ 192.168.56.12   │
-                       │                 │
-                       │ - Kubelet       │
-                       │ - Container     │
-                       │ - Open5GS       │
-                       └─────────────────┘
-```
+Phases are orchestrated by `ansible/phases/00-main-playbook.yml`:
 
-## 📊 Funzionalità Testate
+1. Infrastructure
+2. Kubernetes (K3s)
+3. KubeEdge
+4. Overlay Network (OVS + Multus + NADs)
+5. 5G Core (Open5GS)
+6. UERANSIM & MEC
 
-- **Orchestrazione Edge**: KubeEdge gestisce automaticamente il deployment
-- **Load Balancing**: Trasferimento automatico di container in base al carico
-- **5G Core Network**: Open5GS con interfacce N1/N2/N3/N4 funzionanti
-- **Persistent Storage**: MongoDB con persistent volumes
-- **Network Functions**: OVS-CNI per interfacce di rete 5G
-- **Monitoring**: Metriche di performance e latenza edge-cloud
-
-## 🔧 Requisiti
-
-- Vagrant 2.2+
-- VirtualBox 6.0+
-- 16GB RAM disponibile
-- 50GB spazio disco
-
-## 📁 Struttura del Progetto
-
-```
-.
-├── Vagrantfile                 # Configurazione VM e provisioning automatico
-├── README.md                   # Documentazione completa
-└── ansible/
-    ├── ansible.cfg            # Configurazione Ansible
-    ├── inventory.ini          # Inventory delle macchine
-    ├── playbook.yml           # Playbook principale
-    └── roles/
-        ├── setup/             # Setup base (containerd, kube tools)
-        ├── master/            # Configurazione master Kubernetes
-        ├── workers/           # Configurazione worker Kubernetes
-        ├── kubeedge/          # Installazione e configurazione KubeEdge
-        ├── open5gs/           # Deploy Open5GS con persistent volumes
-        ├── monitoring/        # Installazione dashboard e metriche
-        └── healthcare/        # Deploy servizi IoT medici simulati
-```
-
-## 🧪 Test e Verifica
-
-Dopo il deployment:
+Run everything:
 
 ```bash
-# Accedi al master
-vagrant ssh kube-master
-
-# Verifica cluster
-kubectl get nodes
-kubectl get pods -A
-
-# Verifica KubeEdge
-kubectl get nodes -l node-role.kubernetes.io/edge=
-kubectl get configmap -n kubeedge
-
-# Verifica Open5GS
-kubectl get pods -n open5gs
-kubectl get pvc -n open5gs
-
-# Accedi al dashboard
-kubectl port-forward -n kubernetes-dashboard service/kubernetes-dashboard 8080:443
-# Apri http://localhost:8080 nel browser
+vagrant up  # triggers phases/00-main-playbook.yml on the Ansible VM
 ```
 
-## 📈 Metriche e Performance
+Run specific phases:
 
-Il testbed genera automaticamente:
-- Latenza edge-cloud
-- Throughput delle interfacce 5G
-- Utilizzo CPU/RAM sui nodi
-- Tempo di trasferimento container KubeEdge
-- Performance del core network Open5GS
+```bash
+vagrant ssh ansible
+cd /home/vagrant/ansible-ro
+ansible-playbook phases/00-main-playbook.yml --tags phase4,phase5 -i inventory.ini
+```
 
-## 🚨 Troubleshooting
+> **Note:**  
+> When manually running phases with `ansible-playbook`, be sure to specify the inventory file (e.g., `-i inventory.ini`) from the `ansible-ro` directory.
 
-- **VM non si avviano**: Verifica che VirtualBox sia installato e funzionante
-- **Problemi di rete**: Controlla che le porte 192.168.56.x non siano occupate
-- **Errori Ansible**: Verifica che le VM siano completamente avviate prima del provisioning
+## 5G Network Interfaces
 
-## 📝 Licenza
+The testbed implements the following 5G interfaces using Multus CNI:
 
-MIT License - Libero utilizzo per scopi educativi e di ricerca.
+| Interface | Network    | IP Range      | Purpose              | Protocol       |
+| --------- | ---------- | ------------- | -------------------- | -------------- |
+| **N1**    | n1-net     | 10.201.0.0/24 | UE ↔ AMF (NAS)       | NAS over SCTP  |
+| **N2**    | n2-net     | 10.202.0.0/24 | gNB ↔ AMF (NGAP)     | NGAP over SCTP |
+| **N3**    | n3-net     | 10.203.0.0/24 | gNB/UE ↔ UPF (GTP-U) | GTP-U over UDP |
+| **N4**    | n4-net     | 10.204.0.0/24 | SMF ↔ UPF (PFCP)     | PFCP over UDP  |
+| **N6e**   | n6-mec-net | 10.206.0.0/24 | UPF-edge ↔ MEC       | IP routing     |
+| **N6c**   | n6-cld-net | 10.207.0.0/24 | UPF-cloud ↔ DN       | IP routing     |
+
+**Static IP assignments:**
+
+- AMF: 10.201.0.100 (N1), 10.202.0.100 (N2)
+- SMF: 10.204.0.100 (N4)
+- UPF-edge: 10.203.0.100 (N3), 10.204.0.101 (N4)
+- UPF-cloud: 10.203.0.101 (N3), 10.204.0.102 (N4)
+
+VXLAN tunnels connect worker↔edge with keys: N1=1, N2=2, N3=3, N4=4, N6e=6, N6c=7.
+
+## Validate
+
+See detailed validation steps in `docs/handbook.md`. Quick checks:
+
+```bash
+# Nodes and system pods
+kubectl get nodes -o wide
+kubectl get pods -A
+
+# Multus NADs
+kubectl get network-attachment-definitions -A
+
+# 5G core
+kubectl -n 5g get deploy,svc
+```
+
+## Research & Testing Focus
+
+This testbed is designed for **5G research and testing** with emphasis on:
+
+- **Edge Computing**: Cloud↔edge distribution with KubeEdge
+- **MEC Applications**: Multi-access Edge Computing scenarios
+- **Network Function Testing**: Complete 5G Core with realistic interfaces
+- **Migration Scenarios**: Dynamic UPF/MEC movement between cloud and edge
+- **Performance Analysis**: Ready for monitoring and benchmark tools
+
+## Documentation
+
+- **Complete handbook**: `docs/handbook.md` - Comprehensive guide with all procedures
+- **Diagnostic runbooks**: `docs/runbooks/` - Focused troubleshooting procedures
+- **Ansible phases**: `ansible/phases/*` - Automated deployment scripts
+
+## Testing & Validation
+
+Use the included test script to validate the phased structure:
+
+```bash
+# Validate complete structure
+./test-phases.sh validate
+
+# List all available phases
+./test-phases.sh list
+
+# Inspect a specific phase
+./test-phases.sh 01-infrastructure
+./test-phases.sh 02-kubernetes
+
+# Show help
+./test-phases.sh help
+```
+
+## Troubleshooting
+
+```bash
+# K3s
+journalctl -u k3s -f
+journalctl -u k3s-agent -f
+
+# KubeEdge
+kubectl -n kubeedge get pods
+kubectl -n kubeedge logs -l app=cloudcore --tail=100
+
+# OVS state
+sudo ovs-vsctl show
+```
+
+> **Note:** The commands are just examples. You may need to adapt paths and commands to your specific setup and environment. Generally all the cluster related commands are meant to be runned in the **master** node.
+
+## Future Enhancements
+
+- [ ] **Monitoring Stack**: Prometheus/Grafana integration for metrics collection
+- [ ] **Benchmark Tools**: Automated performance testing and analysis
+- [ ] **Test Suite**: Comprehensive testing framework for different scenarios
+- [ ] **Metrics Dashboard**: Real-time visualization of 5G network performance
+
+## License
+
+MIT License. See `LICENSE`.
+
+## Acknowledgements
+
+- K3s (`https://k3s.io`)
+- KubeEdge (`https://kubeedge.io`)
+- Multus CNI (`https://github.com/k8snetworkplumbingwg/multus-cni`)
+- Open5GS (`https://open5gs.org`)
+- UERANSIM (`https://github.com/aligungr/UERANSIM`)

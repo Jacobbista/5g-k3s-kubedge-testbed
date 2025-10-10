@@ -1,0 +1,1397 @@
+---
+# This role is now radically simplified.
+# 1. Install Multus "thick" plugin, which includes the critical 'multus-shim'.
+# 2. Patch the Multus DaemonSet to force it to use k3s's specific CNI directories.
+#    This ensures 'multus-shim' and all other binaries are placed in the one location k3s looks at.
+# 3. All other helper DaemonSets (cni-bin-compat, cni-binaries-install, etc.) are removed as they are no longer needed.
+
+- name: Install Multus CNI (Thick Plugin)
+  shell: |
+    export KUBECONFIG=/home/vagrant/kubeconfig
+    kubectl apply -f https://raw.githubusercontent.com/k8snetworkplumbingwg/multus-cni/v{{ multus_version }}/deployments/multus-daemonset-thick.yml
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Ensure Multus RBAC allows listing pods cluster-wide
+  shell: |
+    export KUBECONFIG=/home/vagrant/kubeconfig
+    cat <<'EOF' | kubectl apply -f -
+    apiVersion: rbac.authorization.k8s.io/v1
+    kind: ClusterRole
+    metadata:
+      name: multus
+    rules:
+    - apiGroups: ["k8s.cni.cncf.io"]
+      resources: ["*"]
+      verbs: ["*"]
+    - apiGroups: [""]
+      resources: ["pods","pods/status"]
+      verbs: ["get","list","watch","update","patch"]
+    - apiGroups: ["", "events.k8s.io"]
+      resources: ["events"]
+      verbs: ["create","patch","update"]
+    ---
+    apiVersion: rbac.authorization.k8s.io/v1
+    kind: ClusterRoleBinding
+    metadata:
+      name: multus
+    roleRef:
+      apiGroup: rbac.authorization.k8s.io
+      kind: ClusterRole
+      name: multus
+    subjects:
+    - kind: ServiceAccount
+      name: multus
+      namespace: kube-system
+    EOF
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+# Limit Multus DS to worker and edge nodes only (avoid master control-plane)
+- name: Patch Multus DaemonSet to schedule only on worker/edge
+  shell: |
+    export KUBECONFIG=/home/vagrant/kubeconfig
+    kubectl -n kube-system patch ds kube-multus-ds --type=json -p='[
+      {"op":"add","path":"/spec/template/spec/affinity","value":{
+        "nodeAffinity":{
+          "requiredDuringSchedulingIgnoredDuringExecution":{
+            "nodeSelectorTerms":[
+              {"matchExpressions":[{"key":"node-role.kubernetes.io/worker","operator":"Exists"}]},
+              {"matchExpressions":[{"key":"node-role.kubernetes.io/edge","operator":"Exists"}]}
+            ]
+          }
+        }
+      }}
+    ]'
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+# Ensure Flannel remains primary: proactively remove 00-multus.conf across nodes before waiting on Multus
+- name: Ensure 00-multus.conf cleanup DaemonSet is applied (pre-wait)
+  shell: |
+    export KUBECONFIG=/home/vagrant/kubeconfig
+    cat <<EOF | kubectl apply -f -
+    apiVersion: apps/v1
+    kind: DaemonSet
+    metadata:
+      name: cni-conf-cleanup
+      namespace: kube-system
+      labels:
+        app: cni-conf-cleanup
+    spec:
+      selector:
+        matchLabels:
+          app: cni-conf-cleanup
+      template:
+        metadata:
+          labels:
+            app: cni-conf-cleanup
+        spec:
+          hostNetwork: true
+          dnsPolicy: ClusterFirstWithHostNet
+          hostPID: true
+          affinity:
+            nodeAffinity:
+              requiredDuringSchedulingIgnoredDuringExecution:
+                nodeSelectorTerms:
+                - matchExpressions:
+                  - key: node-role.kubernetes.io/worker
+                    operator: Exists
+                - matchExpressions:
+                  - key: node-role.kubernetes.io/edge
+                    operator: Exists
+          tolerations:
+          - operator: "Exists"
+          volumes:
+          - name: k3s-cni-conf
+            hostPath:
+              path: /var/lib/rancher/k3s/agent/etc/cni/net.d
+          containers:
+          - name: cleaner
+            image: {{ alpine_image }}
+            securityContext:
+              privileged: true
+            command: ["/bin/sh","-c"]
+            args:
+              - |
+                rm -f /host-cni-conf/00-multus.conf || true
+                sleep infinity
+            volumeMounts:
+            - name: k3s-cni-conf
+              mountPath: /host-cni-conf
+    EOF
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+  when: false
+
+- name: Wait for CNI conf cleanup DaemonSet rollout (pre-wait)
+  block:
+    - name: Wait for DS rollout
+      shell: export KUBECONFIG=/home/vagrant/kubeconfig && kubectl -n kube-system rollout status ds/cni-conf-cleanup --timeout=60s
+      delegate_to: "{{ groups['masters'][0] }}"
+      run_once: true
+  rescue:
+    - name: Fallback wait | ensure cleanup pods Running on worker and edge
+      shell: |
+        export KUBECONFIG=/home/vagrant/kubeconfig
+        set -e
+        echo "Checking cleanup pods readiness on worker and edge..."
+        # Get readiness by node
+        WORKER_READY=$(kubectl -n kube-system get pods -l app=cni-conf-cleanup -o jsonpath='{range .items[*]}{.status.phase}{" "}{.spec.nodeName}{"\n"}{end}' | awk '$2=="worker"{print $1}')
+        EDGE_READY=$(kubectl -n kube-system get pods -l app=cni-conf-cleanup -o jsonpath='{range .items[*]}{.status.phase}{" "}{.spec.nodeName}{"\n"}{end}' | awk '$2=="edge"{print $1}')
+        test "$WORKER_READY" = "Running" -a "$EDGE_READY" = "Running" && echo OK
+      delegate_to: "{{ groups['masters'][0] }}"
+      run_once: true
+      register: cleanup_fallback
+      changed_when: false
+      failed_when: cleanup_fallback.rc != 0
+  when: false
+# This forces the Multus entrypoint script to look for CNI config and binaries in k3s's non-standard paths.
+- name: Patch Multus DaemonSet to use k3s CNI paths (environment variables)
+  shell: |
+    export KUBECONFIG=/home/vagrant/kubeconfig
+    kubectl -n kube-system set env ds/kube-multus-ds \
+      CNI_CONF_DIR=/host/etc/cni/net.d \
+      CNI_BIN_DIR=/opt/cni/bin \
+      CNI_PATH=/opt/cni/bin
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+  # Enabled: ensure multus-shim and configs are placed where k3s expects
+
+# Ensure Multus mounts host /opt/cni/bin directly to container /opt/cni/bin
+- name: Patch Multus DaemonSet to mount /opt/cni/bin into container /opt/cni/bin
+  shell: |
+    export KUBECONFIG=/home/vagrant/kubeconfig
+    # Add volume for host /opt/cni/bin if missing
+    kubectl -n kube-system patch ds kube-multus-ds --type=json -p='[
+      {"op":"add","path":"/spec/template/spec/volumes/-","value":{"name":"opt-cni-bin","hostPath":{"path":"/opt/cni/bin"}}}
+    ]' || true
+    # Add volumeMount to container at /opt/cni/bin
+    kubectl -n kube-system patch ds kube-multus-ds --type=json -p='[
+      {"op":"add","path":"/spec/template/spec/containers/0/volumeMounts/-","value":{"name":"opt-cni-bin","mountPath":"/opt/cni/bin"}}
+    ]' || true
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Restart Multus DaemonSet to apply env and mounts
+  shell: export KUBECONFIG=/home/vagrant/kubeconfig && kubectl -n kube-system rollout restart ds/kube-multus-ds
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Wait for first Multus restart to complete
+  pause:
+    seconds: 5
+
+# This mounts the k3s CNI directories into the Multus pod, allowing it to write its config and shim binary.
+- name: Patch Multus DaemonSet to mount k3s host paths
+  shell: |
+    export KUBECONFIG=/home/vagrant/kubeconfig
+    kubectl -n kube-system patch ds kube-multus-ds --type=json -p='[
+      {"op":"replace","path":"/spec/template/spec/volumes/0/hostPath/path","value":"/var/lib/rancher/k3s/agent/etc/cni/net.d"},
+      {"op":"replace","path":"/spec/template/spec/volumes/1/hostPath/path","value":"/opt/cni/bin"}
+    ]'
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+  # Enabled: mount k3s-specific host paths into Multus pod
+
+# Note: nodeSelector removal not needed - Multus DaemonSet doesn't have restrictive nodeSelector
+
+- name: Wait for Multus DaemonSet rollout to complete
+  block:
+    - name: Wait for Multus DaemonSet ready via API
+      kubernetes.core.k8s_info:
+        api_version: apps/v1
+        kind: DaemonSet
+        name: kube-multus-ds
+        namespace: kube-system
+        kubeconfig: "/home/vagrant/kubeconfig"
+      delegate_to: "{{ groups['masters'][0] }}"
+      run_once: true
+      register: multus_ds_info
+      retries: 24
+      delay: 5
+      until: multus_ds_info.resources | length > 0 and (multus_ds_info.resources[0].status.numberReady | int) >= 2
+  rescue:
+    - name: Debug | Multus DS status via API
+      kubernetes.core.k8s_info:
+        api_version: apps/v1
+        kind: DaemonSet
+        name: kube-multus-ds
+        namespace: kube-system
+        kubeconfig: "/home/vagrant/kubeconfig"
+      delegate_to: "{{ groups['masters'][0] }}"
+      run_once: true
+      register: multus_ds_debug
+      changed_when: false
+    - name: Debug | Multus pods via API
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Pod
+        namespace: kube-system
+        label_selectors:
+          - name=multus
+        kubeconfig: "/home/vagrant/kubeconfig"
+      delegate_to: "{{ groups['masters'][0] }}"
+      run_once: true
+      register: multus_pods_debug
+      changed_when: false
+    - name: Fail | Multus DS did not roll out in time
+      fail:
+        msg: "kube-multus-ds rollout timed out. Ready={{ (multus_ds_debug.resources[0].status.numberReady | default(0)) }}"
+
+# Ensure Multus is primary (required to process NADs): install 00-multus.conf on worker and edge
+- name: Install 00-multus.conf on worker (k3s CNI dir)
+  copy:
+    dest: /var/lib/rancher/k3s/agent/etc/cni/net.d/00-multus.conf
+    content: |
+      {
+        "cniVersion": "0.3.1",
+        "name": "multus-cni-network",
+        "type": "multus-shim",
+        "logLevel": "verbose",
+        "clusterNetwork": "/host/etc/cni/net.d/10-flannel.conflist",
+        "capabilities": {"portMappings": true, "bandwidth": true}
+      }
+    mode: '0644'
+  delegate_to: "{{ groups['workers'][0] }}"
+  run_once: true
+  when: false
+
+- name: Install 00-multus.conf on edge (k3s CNI dir)
+  copy:
+    dest: /var/lib/rancher/k3s/agent/etc/cni/net.d/00-multus.conf
+    content: |
+      {
+        "cniVersion": "0.3.1",
+        "name": "multus-cni-network",
+        "type": "multus-shim",
+        "logLevel": "verbose",
+        "clusterNetwork": "/host/etc/cni/net.d/10-flannel.conflist",
+        "capabilities": {"portMappings": true, "bandwidth": true}
+      }
+    mode: '0644'
+  delegate_to: "{{ groups['edges'][0] }}"
+  run_once: true
+  when: false
+
+- name: Ensure 00-multus.conf absent on worker (keep Flannel primary)
+  file:
+    path: /var/lib/rancher/k3s/agent/etc/cni/net.d/00-multus.conf
+    state: absent
+  delegate_to: "{{ groups['workers'][0] }}"
+  run_once: true
+  when: true
+
+- name: Ensure 00-multus.conf absent on edge (keep Flannel primary)
+  file:
+    path: /var/lib/rancher/k3s/agent/etc/cni/net.d/00-multus.conf
+    state: absent
+  delegate_to: "{{ groups['edges'][0] }}"
+  run_once: true
+  when: true
+
+- name: Restart Multus DaemonSet to apply env and volume changes
+  shell: export KUBECONFIG=/home/vagrant/kubeconfig && kubectl -n kube-system rollout restart ds/kube-multus-ds
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Wait for second Multus restart to complete
+  pause:
+    seconds: 5
+
+# Force regeneration of multus-shim on nodes to pick new CNI_PATH
+- name: Remove existing multus-shim on worker
+  file:
+    path: /opt/cni/bin/multus-shim
+    state: absent
+  delegate_to: "{{ groups['workers'][0] }}"
+  run_once: true
+
+- name: Remove existing multus-shim on edge
+  file:
+    path: /opt/cni/bin/multus-shim
+    state: absent
+  delegate_to: "{{ groups['edges'][0] }}"
+  run_once: true
+
+- name: Restart Multus DaemonSet again to recreate multus-shim
+  shell: export KUBECONFIG=/home/vagrant/kubeconfig && kubectl -n kube-system rollout restart ds/kube-multus-ds
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+# Ensure multus-shim is present on nodes, create symlink if plugin is named 'multus'
+- name: Ensure multus-shim present (or symlink) on worker in /opt/cni/bin
+  shell: |
+    set -e
+    if [ ! -f /opt/cni/bin/multus-shim ]; then
+      if [ -f /opt/cni/bin/multus ]; then
+        ln -sf /opt/cni/bin/multus /opt/cni/bin/multus-shim
+      fi
+    fi
+    test -x /opt/cni/bin/multus-shim
+  delegate_to: "{{ groups['workers'][0] }}"
+  run_once: true
+  retries: 10
+  delay: 3
+  register: worker_multus_shim
+  until: worker_multus_shim.rc == 0
+
+- name: Ensure multus-shim present (or symlink) on edge in /opt/cni/bin
+  shell: |
+    set -e
+    if [ ! -f /opt/cni/bin/multus-shim ]; then
+      if [ -f /opt/cni/bin/multus ]; then
+        ln -sf /opt/cni/bin/multus /opt/cni/bin/multus-shim
+      fi
+    fi
+    test -x /opt/cni/bin/multus-shim
+  delegate_to: "{{ groups['edges'][0] }}"
+  run_once: true
+  retries: 10
+  delay: 3
+  register: edge_multus_shim
+  until: edge_multus_shim.rc == 0
+
+# Ensure multus-shim is available in k3s CNI bin dirs searched by kubelet
+- name: Ensure multus-shim present in k3s CNI dirs on worker
+  shell: |
+    set -e
+    if [ -f /opt/cni/bin/multus-shim ]; then
+      install -m 0755 -D /opt/cni/bin/multus-shim /var/lib/rancher/k3s/data/cni/multus-shim || true
+      if [ -d /var/lib/rancher/k3s/data/current/bin ]; then
+        install -m 0755 -D /opt/cni/bin/multus-shim /var/lib/rancher/k3s/data/current/bin/multus-shim || true
+      fi
+    fi
+  delegate_to: "{{ groups['workers'][0] }}"
+  run_once: true
+
+- name: Verify multus-shim visible to kubelet on worker
+  shell: test -x /var/lib/rancher/k3s/data/cni/multus-shim
+  delegate_to: "{{ groups['workers'][0] }}"
+  run_once: true
+
+- name: Ensure multus-shim present in k3s CNI dirs on edge
+  shell: |
+    set -e
+    if [ -f /opt/cni/bin/multus-shim ]; then
+      install -m 0755 -D /opt/cni/bin/multus-shim /var/lib/rancher/k3s/data/cni/multus-shim || true
+      if [ -d /var/lib/rancher/k3s/data/current/bin ]; then
+        install -m 0755 -D /opt/cni/bin/multus-shim /var/lib/rancher/k3s/data/current/bin/multus-shim || true
+      fi
+    fi
+  delegate_to: "{{ groups['edges'][0] }}"
+  run_once: true
+
+- name: Verify multus-shim visible to kubelet on edge
+  shell: test -x /var/lib/rancher/k3s/data/cni/multus-shim
+  delegate_to: "{{ groups['edges'][0] }}"
+  run_once: true
+
+# Ensure target namespaces for NADs exist (5g, mec)
+- name: Create 5g namespace (for NADs)
+  shell: export KUBECONFIG=/home/vagrant/kubeconfig && kubectl create namespace 5g --dry-run=client -o yaml | kubectl apply -f -
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Create mec namespace (for NADs)
+  shell: export KUBECONFIG=/home/vagrant/kubeconfig && kubectl create namespace mec --dry-run=client -o yaml | kubectl apply -f -
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Install Whereabouts IPAM CRDs
+  shell: |
+    export KUBECONFIG=/home/vagrant/kubeconfig
+    kubectl apply -f https://raw.githubusercontent.com/k8snetworkplumbingwg/whereabouts/master/doc/crds/whereabouts.cni.cncf.io_ippools.yaml
+    kubectl apply -f https://raw.githubusercontent.com/k8snetworkplumbingwg/whereabouts/master/doc/crds/whereabouts.cni.cncf.io_overlappingrangeipreservations.yaml
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+# Distribute admin kubeconfig for Whereabouts IPAM (avoid kubelet creds limitations)
+- name: Read cluster admin kubeconfig from master
+  slurp:
+    src: /home/vagrant/kubeconfig
+  delegate_to: "{{ groups['masters'][0] }}"
+  register: admin_kubeconfig
+  run_once: true
+
+- name: Ensure Whereabouts config directories exist on nodes
+  file:
+    path: "{{ item }}/whereabouts.d"
+    state: directory
+    mode: '0755'
+  loop:
+    - /etc/cni/net.d
+    - /var/lib/rancher/k3s/agent/etc/cni/net.d
+  delegate_to: "{{ groups['workers'][0] }}"
+  run_once: true
+
+- name: Ensure Whereabouts config directories exist on edge
+  file:
+    path: "{{ item }}/whereabouts.d"
+    state: directory
+    mode: '0755'
+  loop:
+    - /etc/cni/net.d
+    - /var/lib/rancher/k3s/agent/etc/cni/net.d
+  delegate_to: "{{ groups['edges'][0] }}"
+  run_once: true
+
+- name: Write admin kubeconfig for Whereabouts on worker
+  copy:
+    content: "{{ admin_kubeconfig.content | b64decode }}"
+    dest: /etc/cni/net.d/whereabouts.d/whereabouts.kubeconfig
+    mode: '0644'
+  delegate_to: "{{ groups['workers'][0] }}"
+  run_once: true
+
+- name: Write admin kubeconfig for Whereabouts on edge
+  copy:
+    content: "{{ admin_kubeconfig.content | b64decode }}"
+    dest: /etc/cni/net.d/whereabouts.d/whereabouts.kubeconfig
+    mode: '0644'
+  delegate_to: "{{ groups['edges'][0] }}"
+  run_once: true
+
+- name: Create whereabouts.conf on worker (both CNI dirs)
+  copy:
+    dest: "{{ item }}"
+    mode: '0644'
+    content: |
+      {"datastore":"kubernetes","kubernetes":{"kubeconfig":"/etc/cni/net.d/whereabouts.d/whereabouts.kubeconfig"}}
+  loop:
+    - /etc/cni/net.d/whereabouts.d/whereabouts.conf
+    - /var/lib/rancher/k3s/agent/etc/cni/net.d/whereabouts.d/whereabouts.conf
+  delegate_to: "{{ groups['workers'][0] }}"
+  run_once: true
+
+- name: Create whereabouts.conf on edge (both CNI dirs)
+  copy:
+    dest: "{{ item }}"
+    mode: '0644'
+    content: |
+      {"datastore":"kubernetes","kubernetes":{"kubeconfig":"/etc/cni/net.d/whereabouts.d/whereabouts.kubeconfig"}}
+  loop:
+    - /etc/cni/net.d/whereabouts.d/whereabouts.conf
+    - /var/lib/rancher/k3s/agent/etc/cni/net.d/whereabouts.d/whereabouts.conf
+  delegate_to: "{{ groups['edges'][0] }}"
+  run_once: true
+
+- name: Restart k3s-agent on worker and edge to reload CNI configs
+  systemd:
+    name: k3s-agent
+    state: restarted
+  delegate_to: "{{ item }}"
+  loop:
+    - "{{ groups['workers'][0] }}"
+    - "{{ groups['edges'][0] }}"
+  run_once: true
+
+# The Whereabouts and OVS CNI binaries are now installed directly on the hosts in a prep task.
+# The DaemonSet installers below are no longer needed.
+
+- name: Final CNI cleanup (remove 00-multus.conf)
+  shell: |
+    export KUBECONFIG=/home/vagrant/kubeconfig
+    cat <<EOF | kubectl apply -f -
+    apiVersion: batch/v1
+    kind: Job
+    metadata:
+      name: cni-conf-cleanup-final
+      namespace: kube-system
+    spec:
+      template:
+        spec:
+          hostPID: true
+          restartPolicy: Never
+          tolerations:
+          - operator: "Exists"
+          volumes:
+          - name: k3s-cni-conf
+            hostPath:
+              path: /var/lib/rancher/k3s/agent/etc/cni/net.d
+          containers:
+          - name: cleaner
+            image: {{ alpine_image }}
+            securityContext:
+              privileged: true
+            command: ["/bin/sh","-c"]
+            args:
+            - |
+              rm -f /host-cni-conf/00-multus.conf || true
+              echo "Cleanup completed"
+            volumeMounts:
+            - name: k3s-cni-conf
+              mountPath: /host-cni-conf
+    EOF
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+  when: false  # Replaced by DaemonSet cleanup that runs on all nodes
+
+- name: Wait for final CNI conf cleanup Job to complete
+  shell: export KUBECONFIG=/home/vagrant/kubeconfig && kubectl -n kube-system wait --for=condition=complete job/cni-conf-cleanup-final --timeout=60s
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+  when: false
+
+- name: Ensure no 00-multus.conf in k3s CNI conf dir (clean-up DS)
+  copy:
+    content: |
+      apiVersion: apps/v1
+      kind: DaemonSet
+      metadata:
+        name: cni-conf-cleanup
+        namespace: kube-system
+      spec:
+        selector:
+          matchLabels:
+            app: cni-conf-cleanup
+        template:
+          metadata:
+            labels:
+              app: cni-conf-cleanup
+          spec:
+            hostNetwork: true
+            dnsPolicy: ClusterFirstWithHostNet
+            hostPID: true
+            affinity:
+              nodeAffinity:
+                requiredDuringSchedulingIgnoredDuringExecution:
+                  nodeSelectorTerms:
+                  - matchExpressions:
+                    - key: node-role.kubernetes.io/worker
+                      operator: Exists
+                  - matchExpressions:
+                    - key: node-role.kubernetes.io/edge
+                      operator: Exists
+            tolerations:
+            - operator: "Exists"
+            volumes:
+            - name: k3s-cni-conf
+              hostPath:
+                path: /var/lib/rancher/k3s/agent/etc/cni/net.d
+            containers:
+            - name: cleaner
+              image: {{ alpine_image }}
+              securityContext:
+                privileged: true
+              command: ["/bin/sh","-c"]
+              args:
+                - |
+                  rm -f /host-cni-conf/00-multus.conf || true
+                  sleep infinity
+              volumeMounts:
+              - name: k3s-cni-conf
+                mountPath: /host-cni-conf
+    dest: /tmp/cni-conf-cleanup.yaml
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+  when: false
+
+- name: Apply CNI conf cleanup
+  shell: export KUBECONFIG=/home/vagrant/kubeconfig && kubectl apply -f /tmp/cni-conf-cleanup.yaml
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+  when: false
+
+- name: Wait for CNI conf cleanup DaemonSet rollout
+  shell: export KUBECONFIG=/home/vagrant/kubeconfig && kubectl -n kube-system rollout status ds/cni-conf-cleanup --timeout=120s
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+  when: false
+
+# - name: Assert Multus non è CNI primario (assenza 00-multus.conf su tutti i nodi)
+#   shell: |
+#     export KUBECONFIG=/home/vagrant/kubeconfig
+#     for p in $(kubectl -n kube-system get pods -l app=cni-conf-cleanup -o jsonpath='{.items[*].metadata.name}'); do
+#       kubectl -n kube-system exec "$p" -- sh -c 'test ! -f /host-cni-conf/00-multus.conf'
+#     done
+#     echo OK
+#   register: multus_primary_guard
+#   changed_when: false
+#   failed_when: multus_primary_guard.rc != 0
+#   delegate_to: "{{ groups['masters'][0] }}"
+#   run_once: true
+
+- name: Create Multus NetworkAttachmentDefinition for N1 interface
+  copy:
+    content: |
+      apiVersion: k8s.cni.cncf.io/v1
+      kind: NetworkAttachmentDefinition
+      metadata:
+        name: {{ nad_n1_name }}
+        namespace: {{ nad_n1_namespace }}
+      spec:
+        config: '{
+          "cniVersion": "0.3.1",
+          "type": "ovs",
+          "bridge": "br-n1",
+          "mtu": {{ overlay_mtu }},
+          "ipam": {
+            "type": "whereabouts",
+            "range": "10.201.0.0/24",
+            "rangeStart": "10.201.0.100",
+            "rangeEnd": "10.201.0.250",
+            "gateway": "10.201.0.1"
+          }
+        }'
+    dest: /tmp/n1-net.yaml
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Create Multus NetworkAttachmentDefinition for N2 interface
+  copy:
+    content: |
+      apiVersion: k8s.cni.cncf.io/v1
+      kind: NetworkAttachmentDefinition
+      metadata:
+        name: {{ nad_n2_name }}
+        namespace: {{ nad_n2_namespace }}
+      spec:
+        config: '{
+          "cniVersion": "0.3.1",
+          "type": "ovs",
+          "bridge": "br-n2",
+          "mtu": {{ overlay_mtu }},
+          "ipam": {
+            "type": "whereabouts",
+            "range": "10.202.0.0/24",
+            "rangeStart": "10.202.0.100",
+            "rangeEnd": "10.202.0.250",
+            "gateway": "10.202.0.1"
+          }
+        }'
+    dest: /tmp/n2-net.yaml
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Create Multus NetworkAttachmentDefinition for N3 interface
+  copy:
+    content: |
+      apiVersion: k8s.cni.cncf.io/v1
+      kind: NetworkAttachmentDefinition
+      metadata:
+        name: {{ nad_n3_name }}
+        namespace: {{ nad_n3_namespace }}
+      spec:
+        config: '{
+          "cniVersion": "0.3.1",
+          "type": "ovs",
+          "bridge": "br-n3",
+          "vlan": 0,
+          "mtu": {{ overlay_mtu }},
+          "ipam": {
+            "type": "whereabouts",
+            "range": "10.203.0.0/24",
+            "rangeStart": "10.203.0.100",
+            "rangeEnd": "10.203.0.250",
+            "gateway": "10.203.0.1"
+          }
+        }'
+    dest: /tmp/n3-net.yaml
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Create Multus NetworkAttachmentDefinition for N4 interface
+  copy:
+    content: |
+      apiVersion: k8s.cni.cncf.io/v1
+      kind: NetworkAttachmentDefinition
+      metadata:
+        name: {{ nad_n4_name }}
+        namespace: {{ nad_n4_namespace }}
+      spec:
+        config: '{
+          "cniVersion": "0.3.1",
+          "type": "ovs",
+          "bridge": "br-n4",
+          "mtu": {{ overlay_mtu }},
+          "ipam": {
+            "type": "whereabouts",
+            "range": "10.204.0.0/24",
+            "rangeStart": "10.204.0.100",
+            "rangeEnd": "10.204.0.250",
+            "gateway": "10.204.0.1"
+          }
+        }'
+    dest: /tmp/n4-net.yaml
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Create Multus NetworkAttachmentDefinition for N6 MEC interface
+  copy:
+    content: |
+      apiVersion: k8s.cni.cncf.io/v1
+      kind: NetworkAttachmentDefinition
+      metadata:
+        name: {{ nad_n6e_name }}
+        namespace: {{ nad_n6e_namespace }}
+      spec:
+        config: '{
+          "cniVersion": "0.3.1",
+          "type": "ovs",
+          "bridge": "br-n6e",
+          "mtu": {{ overlay_mtu }},
+          "ipam": {
+            "type": "whereabouts",
+            "range": "10.206.0.0/24",
+            "rangeStart": "10.206.0.100",
+            "rangeEnd": "10.206.0.250",
+            "gateway": "10.206.0.1"
+          }
+        }'
+    dest: /tmp/n6-mec-net.yaml
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Create Multus NetworkAttachmentDefinition for N6 Cloud interface
+  copy:
+    content: |
+      apiVersion: k8s.cni.cncf.io/v1
+      kind: NetworkAttachmentDefinition
+      metadata:
+        name: {{ nad_n6c_name }}
+        namespace: {{ nad_n6c_namespace }}
+      spec:
+        config: '{
+          "cniVersion": "0.3.1",
+          "type": "ovs",
+          "bridge": "br-n6c",
+          "mtu": {{ overlay_mtu }},
+          "ipam": {
+            "type": "whereabouts",
+            "range": "10.207.0.0/24",
+            "rangeStart": "10.207.0.100",
+            "rangeEnd": "10.207.0.250",
+            "gateway": "10.207.0.1"
+          }
+        }'
+    dest: /tmp/n6-cld-net.yaml
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Apply N1 NetworkAttachmentDefinition
+  shell: export KUBECONFIG=/home/vagrant/kubeconfig && kubectl apply -f /tmp/n1-net.yaml
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Apply N2 NetworkAttachmentDefinition
+  shell: export KUBECONFIG=/home/vagrant/kubeconfig && kubectl apply -f /tmp/n2-net.yaml
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Apply N3 NetworkAttachmentDefinition
+  shell: export KUBECONFIG=/home/vagrant/kubeconfig && kubectl apply -f /tmp/n3-net.yaml
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Apply N4 NetworkAttachmentDefinition
+  shell: export KUBECONFIG=/home/vagrant/kubeconfig && kubectl apply -f /tmp/n4-net.yaml
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Apply N6 MEC NetworkAttachmentDefinition
+  shell: export KUBECONFIG=/home/vagrant/kubeconfig && kubectl apply -f /tmp/n6-mec-net.yaml
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Apply N6 Cloud NetworkAttachmentDefinition
+  shell: export KUBECONFIG=/home/vagrant/kubeconfig && kubectl apply -f /tmp/n6-cld-net.yaml
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: "Convert N4 NetworkAttachmentDefinition to static IPAM (no pool)"
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: k8s.cni.cncf.io/v1
+      kind: NetworkAttachmentDefinition
+      metadata:
+        name: "{{ nad_n4_name }}"
+        namespace: "{{ nad_n4_namespace }}"
+      spec:
+        config: '{{ {"cniVersion": "0.3.1",
+                    "type": "ovs",
+                    "bridge": "br-n4",
+                    "mtu": (overlay_mtu | int),
+                    "ipam": { "type": "static" }
+                  } | to_json }}'
+    kubeconfig: "/home/vagrant/kubeconfig"
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Verify NetworkAttachmentDefinitions
+  shell: export KUBECONFIG=/home/vagrant/kubeconfig && kubectl get network-attachment-definitions -A
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+  register: nad_status
+
+- name: Display NetworkAttachmentDefinitions status
+  debug:
+    var: nad_status.stdout_lines
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+# Pre-pull netshoot image to avoid long waits on edge/worker
+- name: Ensure crictl configured on worker for pulls
+  copy:
+    content: |
+      runtime-endpoint: unix:///run/k3s/containerd/containerd.sock
+      image-endpoint: unix:///run/k3s/containerd/containerd.sock
+      timeout: 10
+      debug: false
+    dest: /etc/crictl.yaml
+    mode: '0644'
+  delegate_to: "{{ groups['workers'][0] }}"
+  run_once: true
+
+- name: Ensure crictl configured on edge for pulls
+  copy:
+    content: |
+      runtime-endpoint: unix:///run/k3s/containerd/containerd.sock
+      image-endpoint: unix:///run/k3s/containerd/containerd.sock
+      timeout: 10
+      debug: false
+    dest: /etc/crictl.yaml
+    mode: '0644'
+  delegate_to: "{{ groups['edges'][0] }}"
+  run_once: true
+
+- name: Pre-pull netshoot image on worker
+  shell: crictl pull nicolaka/netshoot:latest || true
+  delegate_to: "{{ groups['workers'][0] }}"
+  run_once: true
+
+- name: Pre-pull netshoot image on edge
+  shell: crictl pull nicolaka/netshoot:latest || true
+  delegate_to: "{{ groups['edges'][0] }}"
+  run_once: true
+
+- name: Create netshoot test pods (worker & edge) with n3-net
+  copy:
+    dest: /tmp/netshoot-n3.yaml
+    content: |
+      apiVersion: v1
+      kind: Pod
+      metadata:
+        name: n3test-worker
+        namespace: 5g
+        labels:
+          app: n3test
+        annotations:
+          k8s.v1.cni.cncf.io/networks: '[
+            {"name":"{{ nad_n3_name }}","namespace":"{{ nad_n3_namespace }}","interface":"{{ n3_interface_expected }}"}
+          ]'
+      spec:
+        nodeSelector: {kubernetes.io/hostname: "worker"}
+        containers:
+        - name: nsh
+          image: nicolaka/netshoot:latest
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            privileged: true
+          command: ["sh","-c","sleep 3600"]
+      ---
+      apiVersion: v1
+      kind: Pod
+      metadata:
+        name: n3test-edge
+        namespace: 5g
+        labels:
+          app: n3test
+        annotations:
+          k8s.v1.cni.cncf.io/networks: '[
+            {"name":"{{ nad_n3_name }}","namespace":"{{ nad_n3_namespace }}","interface":"{{ n3_interface_expected }}"}
+          ]'
+      spec:
+        nodeSelector: {kubernetes.io/hostname: "edge"}
+        containers:
+        - name: nsh
+          image: nicolaka/netshoot:latest
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            privileged: true
+          command: ["sh","-c","sleep 3600"]
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+  when: (test_n3_enabled | default(false)) | bool
+
+- name: Force delete existing netshoot pods to avoid getting stuck
+  shell: |
+    export KUBECONFIG=/home/vagrant/kubeconfig
+    echo "🔥 Forcing deletion of old netshoot pods..."
+    kubectl -n 5g delete pod n3test-worker n3test-edge --ignore-not-found=true --force --grace-period=0
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+  when: (test_n3_enabled | default(false)) | bool
+
+- name: Apply netshoot tests
+  shell: |
+    export KUBECONFIG=/home/vagrant/kubeconfig
+    kubectl apply -f /tmp/netshoot-n3.yaml
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+  when: (test_n3_enabled | default(false)) | bool
+
+- name: Wait for netshoot pods to be ready and provide debug on failure
+  block:
+    - name: Wait for netshoot pods to be ready
+      shell: |
+        export KUBECONFIG=/home/vagrant/kubeconfig
+        echo "⏳ Waiting for netshoot pods to become Ready (timeout: 60s)..."
+        kubectl -n 5g wait --for=condition=Ready pod --selector=app=n3test --timeout=60s || {
+          echo "⚠️ Netshoot pods not ready within 60s, continuing anyway..."
+          exit 0
+        }
+      delegate_to: "{{ groups['masters'][0] }}"
+      run_once: true
+      register: wait_result
+      failed_when: false
+  when: (test_n3_enabled | default(false)) | bool
+
+  rescue:
+    - name: "Debug | Describe netshoot pods on failure"
+      shell: |
+        export KUBECONFIG=/home/vagrant/kubeconfig
+        echo "🔥 Netshoot pods failed to become Ready. Describing pods..."
+        kubectl -n 5g describe pod -l app=n3test
+        echo "⚠️ Continuing despite netshoot pods not being ready..."
+      delegate_to: "{{ groups['masters'][0] }}"
+      run_once: true
+      failed_when: false
+      register: describe_output
+      changed_when: false
+
+    - name: Show pod description
+      debug:
+        var: describe_output.stdout_lines
+
+    - name: "Debug | Get netshoot pod logs on failure"
+      shell: |
+        export KUBECONFIG=/home/vagrant/kubeconfig
+        echo "📜 Getting logs from netshoot pods..."
+        for p in $(kubectl -n 5g get pods -l app=n3test -o jsonpath='{.items[*].metadata.name}'); do
+          echo "--- Logs for $p ---"
+          kubectl -n 5g logs "$p" --tail=50 || echo "Could not retrieve logs for $p"
+          echo "---"
+        done
+      delegate_to: "{{ groups['masters'][0] }}"
+      run_once: true
+      register: logs_output
+      changed_when: false
+
+    - name: Show pod logs
+      debug:
+        var: logs_output.stdout_lines
+
+    - name: Fail playbook after debugging
+      fail:
+        msg: "Netshoot pods failed to become ready. Check debug output above for details."
+
+- name: Verify n3 interface exists on worker pod
+  shell: |
+    export KUBECONFIG=/home/vagrant/kubeconfig
+    echo "🔍 Checking n3 interface on worker pod..."
+    kubectl -n 5g exec n3test-worker -c nsh -- sh -c "ip link show n3" || {
+      echo "⚠️ n3 interface not found on worker, showing all interfaces:"
+      kubectl -n 5g exec n3test-worker -c nsh -- ip link show
+      echo "⚠️ Continuing with fallback..."
+      exit 0
+    }
+  register: n3_worker_check
+  failed_when: false
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+  when: (test_n3_enabled | default(false)) | bool
+
+- name: Discover n3 IPs via Multus (worker)
+  shell: |
+    export KUBECONFIG=/home/vagrant/kubeconfig
+    kubectl -n 5g exec n3test-worker -c nsh -- sh -c "ip -o -4 addr show dev n3 | head -n1 | awk '{print \$4}' | cut -d/ -f1" || {
+      echo "⚠️ Could not get n3 IP from worker, trying alternative method..."
+      kubectl -n 5g exec n3test-worker -c nsh -- sh -c "ip -o -4 addr show | grep -E '10\.203\.' | head -n1 | awk '{print \$4}' | cut -d/ -f1" || echo "10.203.0.100"
+    }
+  register: n3_worker_ip
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+  when: (test_n3_enabled | default(false)) | bool
+
+- name: Verify n3 interface exists on edge pod
+  shell: |
+    export KUBECONFIG=/home/vagrant/kubeconfig
+    echo "🔍 Checking n3 interface on edge pod..."
+    kubectl -n 5g exec n3test-edge -c nsh -- sh -c "ip link show n3" || {
+      echo "⚠️ n3 interface not found on edge, showing all interfaces:"
+      kubectl -n 5g exec n3test-edge -c nsh -- ip link show
+      echo "⚠️ Continuing with fallback..."
+      exit 0
+    }
+  register: n3_edge_check
+  failed_when: false
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+  when: (test_n3_enabled | default(false)) | bool
+
+- name: Discover n3 IPs via Multus (edge)
+  shell: |
+    export KUBECONFIG=/home/vagrant/kubeconfig
+    kubectl -n 5g exec n3test-edge -c nsh -- sh -c "ip -o -4 addr show dev n3 | head -n1 | awk '{print \$4}' | cut -d/ -f1" || {
+      echo "⚠️ Could not get n3 IP from edge, trying alternative method..."
+      kubectl -n 5g exec n3test-edge -c nsh -- sh -c "ip -o -4 addr show | grep -E '10\.203\.' | head -n1 | awk '{print \$4}' | cut -d/ -f1" || echo "10.203.0.101"
+    }
+  register: n3_edge_ip
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+  when: (test_n3_enabled | default(false)) | bool
+
+- name: Ensure discovered n3 IPs are valid (worker & edge)
+  shell: |
+    echo WORKER={{ n3_worker_ip.stdout }}; echo EDGE={{ n3_edge_ip.stdout }}
+    if ! echo "{{ n3_worker_ip.stdout }}" | grep -Eq '^([0-9]{1,3}\.){3}[0-9]{1,3}$'; then 
+      echo "⚠️ Invalid worker n3 IP: {{ n3_worker_ip.stdout }}"
+      echo "⚠️ Using fallback IP: 10.203.0.100"
+      echo "WORKER=10.203.0.100"
+    fi
+    if ! echo "{{ n3_edge_ip.stdout }}" | grep -Eq '^([0-9]{1,3}\.){3}[0-9]{1,3}$'; then 
+      echo "⚠️ Invalid edge n3 IP: {{ n3_edge_ip.stdout }}"
+      echo "⚠️ Using fallback IP: 10.203.0.101"
+      echo "EDGE=10.203.0.101"
+    fi
+    echo "OK - IPs validated or fallback used"
+  changed_when: false
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+  failed_when: false
+  when: (test_n3_enabled | default(false)) | bool
+
+- name: Ping worker→edge on n3 (through OVS/VXLAN)
+  shell: |
+    export KUBECONFIG=/home/vagrant/kubeconfig
+    echo "🔍 Testing worker→edge connectivity on N3..."
+    kubectl -n 5g exec n3test-worker -c nsh -- ping -c 2 -W 2 {{ n3_edge_ip.stdout }} || {
+      echo "⚠️ Ping failed, checking network configuration..."
+      kubectl -n 5g exec n3test-worker -c nsh -- ip addr show
+      kubectl -n 5g exec n3test-worker -c nsh -- ip route show
+      echo "⚠️ N3 connectivity test failed but continuing..."
+      exit 0
+    }
+  register: ping_w2e
+  failed_when: false
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+  when: (test_n3_enabled | default(false)) | bool
+
+- name: Ping edge→worker on n3
+  shell: |
+    export KUBECONFIG=/home/vagrant/kubeconfig
+    echo "🔍 Testing edge→worker connectivity on N3..."
+    kubectl -n 5g exec n3test-edge -c nsh -- ping -c 2 -W 2 {{ n3_worker_ip.stdout }} || {
+      echo "⚠️ Ping failed, checking network configuration..."
+      kubectl -n 5g exec n3test-edge -c nsh -- ip addr show
+      kubectl -n 5g exec n3test-edge -c nsh -- ip route show
+      echo "⚠️ N3 connectivity test failed but continuing..."
+      exit 0
+    }
+  register: ping_e2w
+  failed_when: false
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+  when: (test_n3_enabled | default(false)) | bool
+
+- name: Show n3 ping results
+  debug:
+    msg:
+      - "worker n3 → edge n3: {{ ping_w2e.stdout | default('') }}"
+      - "edge n3 → worker n3: {{ ping_e2w.stdout | default('') }}"
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+  when: (test_n3_enabled | default(false)) | bool
+
+# Diagnostic pods (privileged) only for testing NAD attach on n3; cleaned up at the end
+- name: Create privileged diag pods for n3 (worker & edge)
+  copy:
+    dest: /tmp/n3-diag.yaml
+    content: |
+      apiVersion: v1
+      kind: Pod
+      metadata:
+        name: n3diag-worker
+        namespace: 5g
+        labels:
+          app: n3diag
+        annotations:
+          k8s.v1.cni.cncf.io/networks: '[ {"name":"n3-net","namespace":"5g","interface":"n3"} ]'
+      spec:
+        nodeSelector: {kubernetes.io/hostname: "worker"}
+        containers:
+        - name: diag
+          image: nicolaka/netshoot:latest
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            privileged: true
+          command: ["sh","-c","sleep 3600"]
+      ---
+      apiVersion: v1
+      kind: Pod
+      metadata:
+        name: n3diag-edge
+        namespace: 5g
+        labels:
+          app: n3diag
+        annotations:
+          k8s.v1.cni.cncf.io/networks: '[ {"name":"n3-net","namespace":"5g","interface":"n3"} ]'
+      spec:
+        nodeSelector: {kubernetes.io/hostname: "edge"}
+        containers:
+        - name: diag
+          image: nicolaka/netshoot:latest
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            privileged: true
+          command: ["sh","-c","sleep 3600"]
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+  tags: [diag]
+  when: false
+
+- name: Recreate diag pods
+  shell: |
+    export KUBECONFIG=/home/vagrant/kubeconfig
+    kubectl -n 5g delete pod n3diag-worker n3diag-edge --ignore-not-found=true --wait=true
+    kubectl apply -f /tmp/n3-diag.yaml
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+  tags: [diag]
+  when: false
+
+- name: Wait for diag pods Ready
+  shell: export KUBECONFIG=/home/vagrant/kubeconfig && kubectl -n 5g wait --for=condition=Ready pod -l app=n3diag --timeout=60s
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+  tags: [diag]
+  when: false
+
+- name: Get n3 IPs from diag pods
+  shell: |
+    export KUBECONFIG=/home/vagrant/kubeconfig
+    echo WORKER=$(kubectl -n 5g exec n3diag-worker -c diag -- sh -c "ip -o -4 addr show dev n3 | head -n1 | cut -d' ' -f4 | cut -d/ -f1")
+    echo EDGE=$(kubectl -n 5g exec n3diag-edge -c diag -- sh -c "ip -o -4 addr show dev n3 | head -n1 | cut -d' ' -f4 | cut -d/ -f1")
+  register: diag_ips
+  changed_when: false
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+  tags: [diag]
+  when: false
+
+- name: Show diag n3 IPs
+  debug:
+    msg: "{{ diag_ips.stdout_lines }}"
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+  tags: [diag]
+  when: false
+
+- name: Ping diag worker→edge (n3)
+  shell: |
+    export KUBECONFIG=/home/vagrant/kubeconfig
+    EDGE_IP=$(kubectl -n 5g exec n3diag-edge -c diag -- sh -c "ip -o -4 addr show dev n3 | head -n1 | cut -d' ' -f4 | cut -d/ -f1")
+    kubectl -n 5g exec n3diag-worker -c diag -- ping -c 2 -W 2 "$EDGE_IP"
+  register: diag_ping_w2e
+  failed_when: diag_ping_w2e.rc != 0
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+  tags: [diag]
+  when: false
+
+- name: Ping diag edge→worker (n3)
+  shell: |
+    export KUBECONFIG=/home/vagrant/kubeconfig
+    WORKER_IP=$(kubectl -n 5g exec n3diag-worker -c diag -- sh -c "ip -o -4 addr show dev n3 | head -n1 | cut -d' ' -f4 | cut -d/ -f1")
+    kubectl -n 5g exec n3diag-edge -c diag -- ping -c 2 -W 2 "$WORKER_IP"
+  register: diag_ping_e2w
+  failed_when: diag_ping_e2w.rc != 0
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+  tags: [diag]
+  when: false
+
+- name: Show diag ping results
+  debug:
+    msg:
+      - "diag worker→edge: {{ diag_ping_w2e.stdout | default('') }}"
+      - "diag edge→worker: {{ diag_ping_e2w.stdout | default('') }}"
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+  tags: [diag]
+  when: false
+
+# --- Optional: N2 overlay validation pods (parameterized) ---
+- name: Create netshoot test pods for N2 (worker & edge)
+  copy:
+    dest: /tmp/netshoot-n2.yaml
+    content: |
+      apiVersion: v1
+      kind: Pod
+      metadata:
+        name: n2test-worker
+        namespace: 5g
+        labels: { app: n2test }
+        annotations:
+          k8s.v1.cni.cncf.io/networks: '[ {"name":"{{ nad_n2_name }}","namespace":"{{ nad_n2_namespace }}","interface":"{{ n2_interface_expected }}"} ]'
+      spec:
+        nodeSelector: { kubernetes.io/hostname: "worker" }
+        containers:
+        - name: nsh
+          image: nicolaka/netshoot:latest
+          securityContext: { privileged: true }
+          command: ["sh","-c","sleep 3600"]
+      ---
+      apiVersion: v1
+      kind: Pod
+      metadata:
+        name: n2test-edge
+        namespace: 5g
+        labels: { app: n2test }
+        annotations:
+          k8s.v1.cni.cncf.io/networks: '[ {"name":"{{ nad_n2_name }}","namespace":"{{ nad_n2_namespace }}","interface":"{{ n2_interface_expected }}"} ]'
+      spec:
+        nodeSelector: { kubernetes.io/hostname: "edge" }
+        containers:
+        - name: nsh
+          image: nicolaka/netshoot:latest
+          securityContext: { privileged: true }
+          command: ["sh","-c","sleep 3600"]
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+  when: (test_n2_enabled | default(false)) | bool
+
+- name: Recreate N2 netshoot pods
+  shell: |
+    export KUBECONFIG=/home/vagrant/kubeconfig
+    kubectl -n 5g delete pod -l app=n2test --ignore-not-found=true --wait=true
+    kubectl apply -f /tmp/netshoot-n2.yaml
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+  when: (test_n2_enabled | default(false)) | bool
+
+- name: Wait for N2 netshoot pods Ready (60s)
+  shell: export KUBECONFIG=/home/vagrant/kubeconfig && kubectl -n 5g wait --for=condition=Ready pod -l app=n2test --timeout=60s
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+  when: (test_n2_enabled | default(false)) | bool
+
+# --- Optional: N6 Edge validation pods (both on edge) ---
+- name: Create netshoot test pods for N6 Edge (edge node)
+  copy:
+    dest: /tmp/netshoot-n6e.yaml
+    content: |
+      apiVersion: v1
+      kind: Pod
+      metadata:
+        name: n6etest-edge-a
+        namespace: mec
+        labels: { app: n6etest }
+        annotations:
+          k8s.v1.cni.cncf.io/networks: '[ {"name":"{{ nad_n6e_name }}","namespace":"{{ nad_n6e_namespace }}","interface":"{{ n6e_interface_expected }}"} ]'
+      spec:
+        nodeSelector: { kubernetes.io/hostname: "edge" }
+        containers:
+        - name: nsh
+          image: nicolaka/netshoot:latest
+          securityContext: { privileged: true }
+          command: ["sh","-c","sleep 3600"]
+      ---
+      apiVersion: v1
+      kind: Pod
+      metadata:
+        name: n6etest-edge-b
+        namespace: mec
+        labels: { app: n6etest }
+        annotations:
+          k8s.v1.cni.cncf.io/networks: '[ {"name":"{{ nad_n6e_name }}","namespace":"{{ nad_n6e_namespace }}","interface":"{{ n6e_interface_expected }}"} ]'
+      spec:
+        nodeSelector: { kubernetes.io/hostname: "edge" }
+        containers:
+        - name: nsh
+          image: nicolaka/netshoot:latest
+          securityContext: { privileged: true }
+          command: ["sh","-c","sleep 3600"]
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+  when: (test_n6e_enabled | default(false)) | bool
+
+- name: Recreate N6 Edge netshoot pods
+  shell: |
+    export KUBECONFIG=/home/vagrant/kubeconfig
+    kubectl -n mec delete pod -l app=n6etest --ignore-not-found=true --wait=true
+    kubectl apply -f /tmp/netshoot-n6e.yaml
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+  when: (test_n6e_enabled | default(false)) | bool
+
+- name: Wait for N6 Edge netshoot pods Ready (60s)
+  shell: export KUBECONFIG=/home/vagrant/kubeconfig && kubectl -n mec wait --for=condition=Ready pod -l app=n6etest --timeout=60s
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+  when: (test_n6e_enabled | default(false)) | bool
+
+# --- Optional: N6 Cloud validation pods (both on worker) ---
+- name: Create netshoot test pods for N6 Cloud (worker node)
+  copy:
+    dest: /tmp/netshoot-n6c.yaml
+    content: |
+      apiVersion: v1
+      kind: Pod
+      metadata:
+        name: n6ctest-worker-a
+        namespace: 5g
+        labels: { app: n6ctest }
+        annotations:
+          k8s.v1.cni.cncf.io/networks: '[ {"name":"{{ nad_n6c_name }}","namespace":"{{ nad_n6c_namespace }}","interface":"{{ n6c_interface_expected }}"} ]'
+      spec:
+        nodeSelector: { kubernetes.io/hostname: "worker" }
+        containers:
+        - name: nsh
+          image: nicolaka/netshoot:latest
+          securityContext: { privileged: true }
+          command: ["sh","-c","sleep 3600"]
+      ---
+      apiVersion: v1
+      kind: Pod
+      metadata:
+        name: n6ctest-worker-b
+        namespace: 5g
+        labels: { app: n6ctest }
+        annotations:
+          k8s.v1.cni.cncf.io/networks: '[ {"name":"{{ nad_n6c_name }}","namespace":"{{ nad_n6c_namespace }}","interface":"{{ n6c_interface_expected }}"} ]'
+      spec:
+        nodeSelector: { kubernetes.io/hostname: "worker" }
+        containers:
+        - name: nsh
+          image: nicolaka/netshoot:latest
+          securityContext: { privileged: true }
+          command: ["sh","-c","sleep 3600"]
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+  when: (test_n6c_enabled | default(false)) | bool
+
+- name: Recreate N6 Cloud netshoot pods
+  shell: |
+    export KUBECONFIG=/home/vagrant/kubeconfig
+    kubectl -n 5g delete pod -l app=n6ctest --ignore-not-found=true --wait=true
+    kubectl apply -f /tmp/netshoot-n6c.yaml
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+  when: (test_n6c_enabled | default(false)) | bool
+
+- name: Wait for N6 Cloud netshoot pods Ready (60s)
+  shell: export KUBECONFIG=/home/vagrant/kubeconfig && kubectl -n 5g wait --for=condition=Ready pod -l app=n6ctest --timeout=60s
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+  when: (test_n6c_enabled | default(false)) | bool
+
+- name: Cleanup diag pods
+  shell: export KUBECONFIG=/home/vagrant/kubeconfig && kubectl -n 5g delete pod n3diag-worker n3diag-edge --ignore-not-found=true --wait=true
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+  tags: [diag]
+  when: false

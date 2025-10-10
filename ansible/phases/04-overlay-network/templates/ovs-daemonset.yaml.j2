@@ -1,0 +1,82 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: ds-net-setup-{{ node_type }}
+  namespace: kube-system
+spec:
+  selector:
+    matchLabels:
+      app: ds-net-setup-{{ node_type }}
+  template:
+    metadata:
+      labels:
+        app: ds-net-setup-{{ node_type }}
+      annotations:
+        # Forza il rollout quando cambia uno degli script
+        scripts-hash: >-
+          {{ (
+               lookup('file', playbook_dir + '/scripts/ovs-setup.sh') +
+               lookup('file', playbook_dir + '/scripts/ovs-gc.sh') +
+               lookup('file', playbook_dir + '/scripts/host-networkd-prepare.sh')
+             ) | hash('sha256') }}
+    spec:
+      hostNetwork: true
+      hostPID: true
+      nodeSelector:
+        kubernetes.io/hostname: "{{ node_type }}"
+      tolerations:
+      - operator: "Exists"
+      volumes:
+      - name: host-ovs-run              # OVS runtime
+        hostPath: { path: /var/run/openvswitch }
+      - name: host-ovs-etc              # OVS DB/etc
+        hostPath: { path: /etc/openvswitch }
+      - name: host-systemd-network      # <-- necessario per scrivere la .link sull'host
+        hostPath: { path: /etc/systemd/network }
+      - name: ovs-scripts
+        configMap:
+          name: ovs-scripts
+      containers:
+      - name: setup
+        image: {{ alpine_image }}
+        securityContext:
+          privileged: true
+        env:
+        - name: NODE_NAME
+          valueFrom: { fieldRef: { fieldPath: spec.nodeName } }
+        - name: WORKER_IP
+          value: "{{ hostvars[groups['workers'][0]]['ansible_host'] }}"
+        - name: EDGE_IP
+          value: "{{ hostvars[groups['edges'][0]]['ansible_host'] }}"
+        command: ["sh","-c"]
+        args:
+          - |
+            set -e
+            apk add --no-cache bash iproute2 openvswitch iptables util-linux coreutils
+
+            # 1) Prepara host systemd-networkd (ignorare OVS)
+            cp /scripts/host-networkd-prepare.sh /usr/local/bin/host-networkd-prepare.sh
+            chmod +x /usr/local/bin/host-networkd-prepare.sh
+            /usr/local/bin/host-networkd-prepare.sh
+
+            # 2) Crea bridge/tunnel OVS
+            cp /scripts/ovs-setup.sh /usr/local/bin/ovs-setup.sh
+            chmod +x /usr/local/bin/ovs-setup.sh
+            /usr/local/bin/ovs-setup.sh
+
+            # 3) (opzionale) GC e dormi
+            if [ -f /scripts/ovs-gc.sh ]; then
+              cp /scripts/ovs-gc.sh /usr/local/bin/ovs-gc.sh
+              chmod +x /usr/local/bin/ovs-gc.sh
+              /usr/local/bin/ovs-gc.sh &
+            fi
+            sleep infinity
+        volumeMounts:
+        - name: host-ovs-run
+          mountPath: /var/run/openvswitch
+        - name: host-ovs-etc
+          mountPath: /etc/openvswitch
+        - name: host-systemd-network
+          mountPath: /host/etc/systemd/network
+        - name: ovs-scripts
+          mountPath: /scripts

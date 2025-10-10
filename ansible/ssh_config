@@ -1,0 +1,20 @@
+Host master
+    HostName 192.168.56.10
+    User vagrant
+    IdentityFile ~/.ssh/master_key
+    StrictHostKeyChecking no
+    UserKnownHostsFile /dev/null
+
+Host edge
+    HostName 192.168.56.12
+    User vagrant
+    IdentityFile ~/.ssh/edge_key
+    StrictHostKeyChecking no
+    UserKnownHostsFile /dev/null
+
+Host worker  
+    HostName 192.168.56.11
+    User vagrant
+    IdentityFile ~/.ssh/worker_key
+    StrictHostKeyChecking no
+    UserKnownHostsFile /dev/null

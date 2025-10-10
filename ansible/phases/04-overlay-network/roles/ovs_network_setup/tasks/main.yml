@@ -1,0 +1,79 @@
+---
+- name: Create OVS scripts ConfigMap
+  template:
+    src: ovs-scripts-configmap.yaml.j2
+    dest: /tmp/ovs-scripts-configmap.yaml
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Apply OVS scripts ConfigMap
+  shell: |
+    export KUBECONFIG=/home/vagrant/kubeconfig
+    kubectl apply -f /tmp/ovs-scripts-configmap.yaml
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Create OVS network setup DaemonSet for worker
+  template:
+    src: ovs-daemonset.yaml.j2
+    dest: /tmp/ovs-network-setup-worker.yaml
+  vars:
+    node_type: worker
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Create OVS network setup DaemonSet for edge
+  template:
+    src: ovs-daemonset.yaml.j2
+    dest: /tmp/ovs-network-setup-edge.yaml
+  vars:
+    node_type: edge
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Apply OVS network setup DaemonSets
+  shell: |
+    export KUBECONFIG=/home/vagrant/kubeconfig
+    kubectl apply -f /tmp/ovs-network-setup-worker.yaml
+    kubectl apply -f /tmp/ovs-network-setup-edge.yaml
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Wait for OVS network setup pods to be ready
+  shell: |
+    export KUBECONFIG=/home/vagrant/kubeconfig
+    echo "⏳ Waiting for OVS network setup pods to be ready..."
+    for i in $(seq 30); do
+      if kubectl get pods -l app=ds-net-setup-worker -n kube-system --no-headers 2>/dev/null | grep -q "Running" && kubectl get pods -l app=ds-net-setup-edge -n kube-system --no-headers 2>/dev/null | grep -q "Running"; then
+        echo "✅ OVS network setup pods are running (${i}s)"
+        exit 0
+      fi
+      echo -n "."
+      sleep 4
+    done
+    echo "❌ OVS network setup pods not ready after 120s"
+    kubectl get pods -l app=ds-net-setup-worker -n kube-system
+    kubectl get pods -l app=ds-net-setup-edge -n kube-system
+    exit 1
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Verify OVS network setup pods are running
+  shell: |
+    export KUBECONFIG=/home/vagrant/kubeconfig
+    echo "=== OVS Network Setup Pods Status ==="
+    kubectl get pods -n kube-system -l app=ds-net-setup-worker -o wide
+    kubectl get pods -n kube-system -l app=ds-net-setup-edge -o wide
+    echo ""
+    echo "=== Pods are running on worker and edge ==="
+    kubectl get pods -n kube-system -l app=ds-net-setup-worker -o jsonpath='{range .items[*]}{.metadata.name}{" -> "}{.spec.nodeName}{"\n"}{end}'
+    kubectl get pods -n kube-system -l app=ds-net-setup-edge -o jsonpath='{range .items[*]}{.metadata.name}{" -> "}{.spec.nodeName}{"\n"}{end}'
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+  register: ovs_pods_status
+
+- name: Display OVS pods status
+  debug:
+    var: ovs_pods_status.stdout_lines
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true

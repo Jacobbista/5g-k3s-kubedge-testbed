@@ -1,0 +1,94 @@
+---
+# FASE 2: KUBERNETES CLUSTER SETUP
+# Setup k3s master e worker nodes con configurazione di rete corretta
+
+- name: "FASE 2: Setup k3s Master Node"
+  hosts: masters
+  become: yes
+  roles:
+    - { role: roles/k3s_master, tags: ['k3s', 'master', 'control-plane'] }
+
+- name: "FASE 2: Setup k3s Worker Node"
+  hosts: workers:!ansible
+  become: yes
+  roles:
+    - { role: roles/k3s_worker, tags: ['k3s', 'worker', 'agent'] }
+
+- name: "FASE 2: Setup k3s Edge Node"
+  hosts: edges:!ansible
+  become: yes
+  roles:
+    - { role: roles/k3s_edge, tags: ['k3s', 'edge', 'agent'] }
+
+- name: "FASE 2: Verify Kubernetes Cluster"
+  hosts: masters
+  become: yes
+  tags:
+    - verify
+  tasks:
+    - name: "Deps | Ensure python3-pip is installed on master"
+      apt:
+        name: python3-pip
+        state: present
+        update_cache: no
+      run_once: true
+
+    - name: "Deps | Ensure Python Kubernetes client present on master"
+      pip:
+        name: "kubernetes>=29.0.0"
+        executable: pip3
+      run_once: true
+
+    - name: "Kubernetes | Get Nodes via kubernetes.core (no bearer)"
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Node
+        kubeconfig: "/home/vagrant/kubeconfig"
+      run_once: true
+      register: nodes_info
+
+    - name: "Kubernetes | Display cluster nodes"
+      debug:
+        msg: |
+          ✅ Kubernetes cluster ready
+          📊 Nodes: {{ nodes_info.resources | length }}
+          {% for node in nodes_info.resources %}
+          - {{ node.metadata.name }}: {{ (node.status.conditions | selectattr('type','equalto','Ready') | selectattr('status','equalto','True') | list | length) | ternary('True','False') }}
+          {% endfor %}
+
+    - name: "Kubernetes | Verify default namespace exists"
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Namespace
+        name: default
+        kubeconfig: "/home/vagrant/kubeconfig"
+      run_once: true
+      register: namespace_default
+
+    - name: "Kubernetes | Assert default namespace present"
+      assert:
+        that:
+          - namespace_default.resources | length == 1
+        fail_msg: "Default namespace not found via API"
+      run_once: true
+
+    - name: "Kubernetes | Init Ready node count"
+      set_fact:
+        ready_nodes_count: 0
+      run_once: true
+
+    - name: "Kubernetes | Increment Ready node count"
+      set_fact:
+        ready_nodes_count: "{{ (ready_nodes_count | int) + 1 }}"
+      loop: "{{ nodes_info.resources }}"
+      loop_control:
+        label: "{{ item.metadata.name }}"
+      when: item.status is defined and item.status.conditions is defined and (item.status.conditions | selectattr('type','equalto','Ready') | selectattr('status','equalto','True') | list | length) > 0
+      run_once: true
+
+    - name: "Kubernetes | Verify all nodes are Ready"
+      assert:
+        that:
+          - (ready_nodes_count | int) == 3
+        fail_msg: "Expected 3 Ready nodes, got {{ ready_nodes_count }}"
+      run_once: true

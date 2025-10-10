@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ovs-scripts
+  namespace: kube-system
+data:
+  ovs-setup.sh: |
+{{ lookup('file', playbook_dir + '/scripts/ovs-setup.sh') | indent(4, True) }}
+  ovs-gc.sh: |
+{{ lookup('file', playbook_dir + '/scripts/ovs-gc.sh') | indent(4, True) }}
+  host-networkd-prepare.sh: |
+{{ lookup('file', playbook_dir + '/scripts/host-networkd-prepare.sh') | indent(4, True) }}

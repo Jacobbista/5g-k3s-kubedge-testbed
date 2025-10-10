@@ -1,0 +1,70 @@
+---
+# FASE 4: OVERLAY NETWORK SETUP
+# Setup OVS bridges e Multus CNI per interfacce 5G
+
+- name: "FASE 4: Install CNI binaries on nodes"
+  hosts: all:!masters:!ansible
+  become: yes
+  roles:
+    - { role: roles/cni_binaries_setup, tags: ['cni', 'network', 'binaries'] }
+
+- name: "FASE 4: Setup OVS Network Infrastructure"
+  hosts: masters
+  become: yes
+  roles:
+    - { role: roles/ovs_network_setup, tags: ['ovs', 'network', 'overlay'] }
+
+- name: "FASE 4: Install Multus CNI"
+  hosts: masters
+  become: yes
+  roles:
+    - { role: roles/multus_install, tags: ['multus', 'cni', 'network'] }
+
+- name: "FASE 4: Verify Overlay Network Components"
+  hosts: masters
+  become: yes
+  tags:
+    - verify
+  tasks:
+    - name: "Overlay | Get OVS DaemonSets"
+      kubernetes.core.k8s_info:
+        api_version: apps/v1
+        kind: DaemonSet
+        namespace: kube-system
+        kubeconfig: "/home/vagrant/kubeconfig"
+      register: daemonsets_info
+
+    - name: "Overlay | Get Multus DaemonSet"
+      kubernetes.core.k8s_info:
+        api_version: apps/v1
+        kind: DaemonSet
+        name: kube-multus-ds
+        namespace: kube-system
+        kubeconfig: "/home/vagrant/kubeconfig"
+      register: multus_ds_info
+
+    - name: "Overlay | Get NetworkAttachmentDefinitions"
+      kubernetes.core.k8s_info:
+        api_version: k8s.cni.cncf.io/v1
+        kind: NetworkAttachmentDefinition
+        kubeconfig: "/home/vagrant/kubeconfig"
+      register: nads_info
+
+    - name: "Overlay | Assert readiness conditions"
+      assert:
+        that:
+          - multus_ds_info.resources[0].status.numberReady | int == 2
+          - (daemonsets_info.resources | selectattr('metadata.name','match','ds-net-setup.*') | list | length) == 2
+          - (daemonsets_info.resources | selectattr('metadata.name','match','ds-net-setup.*') | map(attribute='status.numberReady') | map('int') | sum) == 2
+          - nads_info.resources | length >= 6
+
+    - name: "Overlay | Display overlay network status"
+      debug:
+        msg: |
+          ✅ Overlay Network Setup Complete
+          📦 Multus DaemonSet: {{ multus_ds_info.resources[0].status.numberReady }}/2 Ready
+          🔗 OVS DaemonSets: {{ daemonsets_info.resources | selectattr('metadata.name', 'match', 'ds-net-setup.*') | map(attribute='status.numberReady') | list | join('/') }}/2 Ready
+          🌐 NetworkAttachmentDefinitions: {{ nads_info.resources | length }} configured
+          {% for nad in nads_info.resources %}
+          - {{ nad.metadata.namespace }}/{{ nad.metadata.name }}
+          {% endfor %}

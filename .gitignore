@@ -1,2 +1,40 @@
-#Directory
-.vagrant
+# Sensitive
+.env
+*.env
+secrets/
+credentials/
+
+# OS junk
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+
+# Logs
+*.log
+
+# Vagrant
+.vagrant/
+*.vmdk
+*.vdi
+*.vbox
+
+# IDE
+.vscode/
+.idea/
+
+# Ansible / 5G artifacts
+*.retry
+ansible.log
+kubeconfig
+*.kubeconfig
+k3s_token
+edge_token
+
+# OVS
+ovs-vswitchd.log
+ovsdb-server.log
+
+# Boxes
+*.box

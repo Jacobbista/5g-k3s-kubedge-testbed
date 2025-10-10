@@ -1,0 +1,57 @@
+---
+# FASE 6: UERANSIM AND MEC SETUP
+# Deploy UERANSIM (gNB, UE) e MEC applications
+
+- name: "FASE 6: Deploy UERANSIM & MEC"
+  hosts: masters
+  become: yes
+  roles:
+    - { role: roles/ueransim_mec, tags: ['ueransim','mec'] }
+
+- name: "FASE 6: Verify UERANSIM and MEC Deployment"
+  hosts: masters
+  become: yes
+  tags:
+    - verify
+  tasks:
+    - name: "UERANSIM | Get 5G pods"
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Pod
+        namespace: 5g
+        kubeconfig: "/home/vagrant/kubeconfig"
+      register: pods_5g_info
+
+    - name: "UERANSIM | Get MEC pods"
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Pod
+        namespace: mec
+        kubeconfig: "/home/vagrant/kubeconfig"
+      register: pods_mec_info
+
+    - name: "UERANSIM | Get 5G services"
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Service
+        namespace: 5g
+        kubeconfig: "/home/vagrant/kubeconfig"
+      register: services_5g_info
+
+    - name: "UERANSIM | Display UERANSIM and MEC deployment status"
+      debug:
+        msg: |
+          ✅ UERANSIM & MEC Setup Complete
+          📦 5G Pods: {{ pods_5g_info.resources | length }}
+          {% for pod in pods_5g_info.resources %}
+          - {{ pod.metadata.name }}: {{ pod.status.phase }} ({{ pod.spec.nodeName }})
+          {% endfor %}
+          📦 MEC Pods: {{ pods_mec_info.resources | length }}
+          {% for pod in pods_mec_info.resources %}
+          - {{ pod.metadata.name }}: {{ pod.status.phase }} ({{ pod.spec.nodeName }})
+          {% endfor %}
+          🌐 5G Services: {{ services_5g_info.resources | length }}
+          {% for svc in services_5g_info.resources %}
+          - {{ svc.metadata.name }}: {{ svc.spec.type }} ({{ svc.spec.clusterIP }}:{{ svc.spec.ports[0].port }})
+          {% endfor %}
+

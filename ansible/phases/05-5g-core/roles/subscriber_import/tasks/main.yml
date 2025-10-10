@@ -1,0 +1,88 @@
+---
+# Import Open5GS subscribers into MongoDB using an in-cluster Job
+- name: Read subscribers JSON from role directory (controller)
+  slurp:
+    src: "{{ role_path }}/subscribers/subscribers.json"
+  register: subs_json
+  run_once: true
+  delegate_to: localhost
+
+- name: Compute checksum for idempotent resource names
+  set_fact:
+    subs_checksum: "{{ (subs_json.content | b64decode) | hash('sha1') }}"
+  run_once: true
+
+- name: Create ConfigMap with subscribers JSON
+  kubernetes.core.k8s:
+    api_version: v1
+    kind: ConfigMap
+    name: "subscribers-json-{{ subs_checksum }}"
+    namespace: 5g
+    state: present
+    definition:
+      data:
+        subs.json: "{{ (subs_json.content | b64decode | from_json) | to_json }}"
+    kubeconfig: "/home/vagrant/kubeconfig"
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Create Job to import subscribers into MongoDB
+  kubernetes.core.k8s:
+    api_version: batch/v1
+    kind: Job
+    name: "sub-import-{{ subs_checksum }}"
+    namespace: 5g
+    state: present
+    definition:
+      spec:
+        backoffLimit: 0
+        template:
+          spec:
+            restartPolicy: Never
+            containers:
+            - name: importer
+              image: python:3.11
+              command: ["bash","-lc"]
+              args:
+                - |
+                  set -e
+                  pip install -q 'pymongo<4.0'
+                  python - <<'PY'
+                  import json
+                  from pymongo import MongoClient
+                  with open('/data/subs.json') as f:
+                      data = json.load(f)
+                  client = MongoClient('mongodb://mongodb:27017/')
+                  col = client['open5gs']['subscribers']
+                  cnt = 0
+                  for s in data.get('subscribers', []):
+                      col.update_one({'imsi': s['imsi']}, {'$set': s}, upsert=True)
+                      cnt += 1
+                  print(f"Imported/updated {cnt} subscribers")
+                  PY
+              volumeMounts:
+                - name: subs
+                  mountPath: /data
+            volumes:
+              - name: subs
+                configMap:
+                  name: "subscribers-json-{{ subs_checksum }}"
+    kubeconfig: "/home/vagrant/kubeconfig"
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Wait for import Job to complete (up to 90s)
+  kubernetes.core.k8s_info:
+    api_version: batch/v1
+    kind: Job
+    name: "sub-import-{{ subs_checksum }}"
+    namespace: 5g
+    kubeconfig: "/home/vagrant/kubeconfig"
+  register: job_info
+  retries: 18
+  delay: 5
+  until: job_info.resources | length > 0 and (job_info.resources[0].status.succeeded | default(0) | int) >= 1
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+

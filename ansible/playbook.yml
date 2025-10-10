@@ -1,60 +1,29 @@
 ---
-- name: 1) Base setup (containerd + kube tools) su nodi Kubernetes
-  hosts: k8s_cluster
-  become: yes
-  roles:
-    - setup
+# LEGACY PLAYBOOK - DEPRECATED
+# Questo playbook è stato sostituito dalla struttura organizzata in fasi
+# Usa invece: ansible-playbook phases/00-main-playbook.yml
 
-- name: 1b) Base setup (containerd only) su nodi edge
-  hosts: edge_nodes
-  become: yes
-  roles:
-    - edge_setup
-
-- name: 2) Inizializza master e pubblica join command
-  hosts: masters
-  become: yes
-  roles:
-    - master
-
-- name: 3) Join automatico dei worker
-  hosts: workers
-  become: yes
-  roles:
-    - workers
-
-- name: 4) Installazione e configurazione KubeEdge
-  hosts: masters
-  become: yes
-  roles:
-    - kubeedge
-
-- name: 5) Join automatico del nodo edge
-  hosts: edge_nodes
-  become: yes
-  roles:
-    - kubeedge_edge
-
-- name: 6) Deploy Open5GS con persistent volumes e OVS-CNI
-  hosts: masters
-  become: yes
-  roles:
-    - open5gs
-
-- name: 7) Installazione dashboard e monitoring
-  hosts: masters
-  become: yes
-  roles:
-    - monitoring
-
-- name: 8) Deploy servizi IoT medici simulati
-  hosts: masters
-  become: yes
-  roles:
-    - healthcare
-
-- name: 9) Test di carico e verifica funzionalità KubeEdge
-  hosts: masters
-  become: yes
-  roles:
-    - load_testing
+- name: "⚠️  DEPRECATED PLAYBOOK"
+  hosts: localhost
+  gather_facts: no
+  tasks:
+    - name: "Display deprecation notice"
+      debug:
+        msg: |
+          ⚠️  QUESTO PLAYBOOK È STATO DEPRECATO
+          =====================================
+          
+          Il progetto è stato riorganizzato in fasi per un deployment più controllato.
+          
+          🚀 NUOVO COMANDO:
+          ansible-playbook phases/00-main-playbook.yml
+          
+          📁 STRUTTURA ORGANIZZATA:
+          phases/01-infrastructure/     - Setup infrastruttura base
+          phases/02-kubernetes/         - Cluster Kubernetes (k3s)
+          phases/03-kubeedge/           - Integrazione KubeEdge
+          phases/04-overlay-network/    - Rete overlay (OVS + Multus)
+          phases/05-5g-core/            - 5G Core Network Functions
+          phases/06-ueransim-mec/       - UERANSIM e MEC
+          
+          📖 Per maggiori dettagli: cat phases/README.md

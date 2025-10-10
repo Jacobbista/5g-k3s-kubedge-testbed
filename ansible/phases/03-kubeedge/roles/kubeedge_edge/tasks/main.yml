@@ -1,0 +1,452 @@
+---
+# KUBEEDGE EDGE NODE SETUP (EDGECORE)
+# Installa KubeEdge edgecore sull'edge node e si connette al cloudcore
+
+- name: "KubeEdge | Download keadm binary for edgecore management"
+  get_url:
+    url: "https://github.com/kubeedge/kubeedge/releases/download/v{{ kubeedge_version }}/keadm-v{{ kubeedge_version }}-linux-amd64.tar.gz"
+    dest: /tmp/keadm.tar.gz
+    mode: '0644'
+    force: yes
+  register: keadm_dl
+  retries: 5
+  delay: 6
+  until: keadm_dl is succeeded
+
+- name: "KubeEdge | Extract keadm binary from archive"
+  unarchive:
+    src: /tmp/keadm.tar.gz
+    dest: /tmp
+    remote_src: true
+
+- name: "KubeEdge | Install keadm binary to /usr/local/bin"
+  copy:
+    src: "/tmp/keadm-v{{ kubeedge_version }}-linux-amd64/keadm/keadm"
+    dest: /usr/local/bin/keadm
+    mode: '0755'
+    remote_src: true
+
+- name: "KubeEdge | Wait for cloudcore to be ready before joining"
+  shell: |
+    echo "⏳ Waiting for KubeEdge cloudcore to be ready..."
+    for i in $(seq 12); do
+      if timeout 1 bash -c "</dev/tcp/{{ hostvars[groups['workers'][0]]['ansible_host'] }}/10000" 2>/dev/null; then
+        echo "✅ KubeEdge cloudcore is reachable! (${i}s)"
+        exit 0
+      fi
+      echo -n "."
+      sleep 5
+    done
+    echo "❌ KubeEdge cloudcore not reachable within 60s"
+    exit 1
+  register: cloud_ready
+  failed_when: cloud_ready.rc != 0
+
+- name: "KubeEdge | Copy kubeconfig from master to edge"
+  slurp:
+    src: /etc/rancher/k3s/k3s.yaml
+  delegate_to: "{{ groups['masters'][0] }}"
+  register: kubeconfig_content
+
+- name: "KubeEdge | Create kubeconfig directory on edge node"
+  file:
+    path: /etc/rancher/k3s
+    state: directory
+    mode: '0755'
+    owner: root
+    group: root
+
+- name: "KubeEdge | Create kubeconfig on edge node"
+  copy:
+    content: "{{ kubeconfig_content.content | b64decode }}"
+    dest: /etc/rancher/k3s/k3s.yaml
+    mode: '0644'
+    owner: root
+    group: root
+
+- name: "KubeEdge | Point edge kubeconfig to master API (not 127.0.0.1)"
+  replace:
+    path: /etc/rancher/k3s/k3s.yaml
+    regexp: 'server:\s*https://[^\s]+:6443'
+    replace: "server: https://{{ hostvars[groups['masters'][0]]['ansible_host'] }}:6443"
+
+- name: "KubeEdge | Wait for edge node to be registered in k3s (from master)"
+  shell: |
+    echo "⏳ Waiting for edge node registration..."
+    for i in $(seq 60); do
+      if kubectl --kubeconfig=/home/vagrant/kubeconfig get node {{ inventory_hostname }} >/dev/null 2>&1; then
+        echo "✅ Edge node found in cluster (${i}s)";
+        kubectl --kubeconfig=/home/vagrant/kubeconfig get node {{ inventory_hostname }} -o wide;
+        exit 0;
+      fi;
+      sleep 2;
+    done;
+    echo "❌ Edge node not registered in 120s";
+    exit 1
+  delegate_to: "{{ groups['masters'][0] }}"
+  register: k3s_verify
+  failed_when: k3s_verify.rc != 0
+  when: false
+
+- name: "KubeEdge | Verify k3s is running and ready for KubeEdge"
+  shell: |
+    echo "🔍 Verifying k3s is running and ready for KubeEdge..."
+    if systemctl is-active --quiet k3s-agent; then
+      echo "✅ k3s-agent is running"
+      echo "📊 k3s agent status:"
+      systemctl status k3s-agent --no-pager -l
+      echo "📊 k3s agent logs (last 10 lines):"
+      journalctl -u k3s-agent --no-pager -n 10
+    else
+      echo "❌ k3s-agent is not running"
+      systemctl status k3s-agent --no-pager
+      exit 1
+    fi
+  register: k3s_verify
+  failed_when: k3s_verify.rc != 0
+
+- name: "KubeEdge | Copy edge token from worker to edge"
+  slurp:
+    src: /home/vagrant/edge_token
+  delegate_to: "{{ groups['workers'][0] }}"
+  register: edge_token_content
+
+- name: "KubeEdge | Create edge token file on edge node"
+  copy:
+    content: "{{ edge_token_content.content | b64decode | trim }}"
+    dest: /home/vagrant/edge_token
+    mode: '0600'
+    owner: vagrant
+    group: vagrant
+
+- name: Stop edgecore service if running
+  systemd:
+    name: edgecore
+    state: stopped
+  ignore_errors: yes
+
+- name: Disable edgecore service if enabled
+  systemd:
+    name: edgecore
+    enabled: no
+  ignore_errors: yes
+
+- name: Remove edgecore systemd unit file if present
+  file:
+    path: /etc/systemd/system/edgecore.service
+    state: absent
+
+- name: Reset any existing KubeEdge state (best-effort)
+  shell: keadm reset --force || true
+  changed_when: false
+  failed_when: false
+
+- name: Cleanup containerd sandboxes and containers (best-effort)
+  shell: |
+    if command -v crictl >/dev/null 2>&1; then
+      crictl rmp --all --force 2>/dev/null || true
+      crictl rm --all --force 2>/dev/null || true
+    fi
+  changed_when: false
+  failed_when: false
+
+  # No containerd systemd management: k3s provides containerd
+
+- name: Ensure reliable DNS resolvers for image pulls
+  shell: |
+    echo "🔧 Configuring reliable DNS resolvers..."
+    # Backup original resolv.conf
+    cp /etc/resolv.conf /etc/resolv.conf.backup || true
+    
+    # Create new resolv.conf with reliable DNS servers
+    cat > /etc/resolv.conf << 'EOF'
+    nameserver 8.8.8.8
+    nameserver 1.1.1.1
+    nameserver 8.8.4.4
+    nameserver 1.0.0.1
+    options timeout:2
+    options attempts:3
+    EOF
+    
+    echo "✅ DNS configured with reliable servers"
+    
+    # Test DNS resolution
+    echo "🔍 Testing DNS resolution..."
+    if nslookup registry-1.docker.io >/dev/null 2>&1; then
+      echo "✅ DNS resolution working"
+    else
+      echo "❌ DNS resolution still failing"
+      exit 1
+    fi
+  changed_when: true
+
+- name: Configure crictl to use k3s containerd socket
+  copy:
+    content: |
+      runtime-endpoint: unix:///run/k3s/containerd/containerd.sock
+      image-endpoint: unix:///run/k3s/containerd/containerd.sock
+      timeout: 10
+      debug: false
+    dest: /etc/crictl.yaml
+    mode: '0644'
+
+- name: Ensure chrony is enabled and running (time sync)
+  systemd:
+    name: chrony
+    enabled: yes
+    state: started
+
+- name: Force time sync via chrony and enable NTP
+  shell: |
+    set -e
+    timedatectl set-ntp true || true
+    chronyc -a makestep || true
+    timedatectl status | sed -n '1,15p'
+  register: time_sync
+  changed_when: true
+
+- name: Show time sync status
+  debug:
+    var: time_sync.stdout_lines
+
+- name: "KubeEdge | Copy current config.toml as new template base"
+  copy:
+    src: /var/lib/rancher/k3s/agent/etc/containerd/config.toml
+    dest: /var/lib/rancher/k3s/agent/etc/containerd/config.toml.tmpl
+    remote_src: true
+    mode: '0644'
+    owner: root
+    group: root
+  tags:
+    - setup
+    - containerd
+    - kubeedge
+
+- name: "KubeEdge | Remove systemd_cgroup from CRI section (incompatible with runc.v2)"
+  replace:
+    path: /var/lib/rancher/k3s/agent/etc/containerd/config.toml.tmpl
+    regexp: '^\s*systemd_cgroup\s*=\s*.*'
+    replace: ''
+  tags:
+    - setup
+    - containerd
+    - kubeedge
+
+- name: "KubeEdge | Ensure SystemdCgroup is enabled in runc options"
+  lineinfile:
+    path: /var/lib/rancher/k3s/agent/etc/containerd/config.toml.tmpl
+    line: '    SystemdCgroup = true'
+    insertafter: '^\s*\[plugins\."io\.containerd\.runc\.v2"\]'
+    state: present
+  tags:
+    - setup
+    - containerd
+    - kubeedge
+
+- name: "KubeEdge | Restart k3s-agent to apply containerd configuration"
+  systemd:
+    name: k3s-agent
+    state: restarted
+  tags:
+    - setup
+    - containerd
+    - kubeedge
+
+- name: "KubeEdge | Wait for k3s-agent to be ready after containerd config"
+  wait_for:
+    port: 10250
+    host: "{{ ansible_host }}"
+    timeout: 60
+  tags:
+    - setup
+    - containerd
+    - kubeedge
+
+# Pre-pull KubeEdge images to avoid delays and verify registry access
+- name: Pre-pull kubeedge/installation-package image
+  shell: crictl pull docker.io/kubeedge/installation-package:v{{ kubeedge_version }} || true
+  changed_when: false
+
+- name: Pre-pull kubeedge/iptables-manager image
+  shell: crictl pull docker.io/kubeedge/iptables-manager:v{{ kubeedge_version }} || true
+  changed_when: false
+
+# CRI endpoint is now passed directly to keadm join - no symlink needed
+
+- name: Remove Multus default CNI config if present (k3s agent dir)
+  file:
+    path: /var/lib/rancher/k3s/agent/etc/cni/net.d/00-multus.conf
+    state: absent
+
+- name: Remove Multus default CNI config if present (/etc/cni)
+  file:
+    path: /etc/cni/net.d/00-multus.conf
+    state: absent
+
+
+- name: Umount /etc/kubeedge if mounted (before join)
+  shell: |
+    if mountpoint -q /etc/kubeedge; then umount -l /etc/kubeedge; fi
+  changed_when: false
+  failed_when: false
+
+- name: Umount /var/lib/kubeedge if mounted (before join)
+  shell: |
+    if mountpoint -q /var/lib/kubeedge; then umount -l /var/lib/kubeedge; fi
+  changed_when: false
+  failed_when: false
+
+- name: Remove /etc/kubeedge before join
+  file:
+    path: /etc/kubeedge
+    state: absent
+
+- name: Remove /var/lib/kubeedge before join
+  file:
+    path: /var/lib/kubeedge
+    state: absent
+
+- name: Small pause to avoid race conditions before join
+  pause:
+    seconds: 1
+
+- name: "KubeEdge | Ensure old edge node resource is removed (from master)"
+  shell: kubectl --kubeconfig=/home/vagrant/kubeconfig delete node {{ inventory_hostname }} --ignore-not-found=true
+  delegate_to: "{{ groups['masters'][0] }}"
+  changed_when: false
+
+- name: CRI | Diagnostics (pre-join)
+  shell: |
+    set -e
+    echo "=== crictl info ==="
+    crictl info || true
+    echo "=== crictl images ==="
+    crictl images || true
+    echo "=== crictl ps ==="
+    crictl ps || true
+    echo "=== mounts (kubeedge) ==="
+    mount | grep -E 'kubeedge|containerd|overlay' || true
+    echo "=== k3s-agent logs (tail) ==="
+    journalctl -u k3s-agent --no-pager -n 60 || true
+    echo "=== containerd logs (tail) ==="
+    journalctl -u containerd --no-pager -n 60 || true
+  register: pre_cri_diag
+  changed_when: false
+  when: (kedge_debug | default(false)) | bool
+
+- name: Show CRI diagnostics (pre-join)
+  debug:
+    msg: "{{ pre_cri_diag.stdout.split('\n') }}"
+  when: (kedge_debug | default(false)) | bool
+
+- name: Join edge node to KubeEdge cluster
+  shell: |
+    echo "🔗 Joining edge node to KubeEdge cluster..."
+    timeout 300 keadm join \
+      --cloudcore-ipport={{ hostvars[groups['workers'][0]]['ansible_host'] }}:10000 \
+      --kubeedge-version={{ kubeedge_version }} \
+      --token=$(cat /home/vagrant/edge_token) \
+      --remote-runtime-endpoint=unix:///run/k3s/containerd/containerd.sock \
+      --cgroupdriver=systemd
+  args:
+    creates: /etc/kubeedge/config/edgecore.yaml
+  register: keadm_join
+  retries: 3
+  delay: 10
+  ignore_errors: yes
+
+- name: CRI | Diagnostics (post-join on failure)
+  when: keadm_join.rc != 0
+  shell: |
+    echo "=== keadm stdout ==="; echo "{{ keadm_join.stdout | replace('"', '\\"') }}"; echo
+    echo "=== keadm stderr ==="; echo "{{ keadm_join.stderr | replace('"', '\\"') }}"; echo
+    echo "=== crictl info ==="; crictl info || true; echo
+    echo "=== crictl pods ==="; crictl pods || true; echo
+    echo "=== mounts (kubeedge) ==="; mount | grep -E 'kubeedge|containerd|overlay' || true; echo
+    echo "=== k3s-agent logs (tail) ==="; journalctl -u k3s-agent --no-pager -n 120 || true; echo
+    echo "=== containerd logs (tail) ==="; journalctl -u containerd --no-pager -n 120 || true
+  register: post_cri_diag
+  changed_when: false
+
+- name: Show CRI diagnostics (post-join)
+  when: keadm_join.rc != 0
+  debug:
+    msg: "{{ post_cri_diag.stdout.split('\n') }}"
+
+- name: Fail if join failed
+  when: keadm_join.rc != 0 and (keadm_join.stderr is not search("node already exists"))
+  fail:
+    msg: "keadm join failed. See diagnostics above."
+
+- name: "KubeEdge | Verify edgecore configuration"
+  shell: |
+    echo "🔍 Verifying edgecore configuration..."
+    if [ -f /etc/kubeedge/config/edgecore.yaml ]; then
+      echo "✅ edgecore config found"
+      echo "📊 edgecore config content:"
+      cat /etc/kubeedge/config/edgecore.yaml
+    else
+      echo "❌ edgecore config not found"
+      exit 1
+    fi
+  register: edgecore_verify
+  failed_when: edgecore_verify.rc != 0
+
+- name: Ensure edgecore cgroupDriver is systemd
+  blockinfile:
+    path: /etc/kubeedge/config/edgecore.yaml
+    marker: "# {mark} ANSIBLE cgroup driver"
+    block: |
+      modules:
+        edged:
+          tailoredKubeletConfig:
+            cgroupDriver: systemd
+  notify: restart edgecore
+
+- name: Create edgecore systemd unit if missing (keadm usually creates it)
+  copy:
+    dest: /etc/systemd/system/edgecore.service
+    mode: '0644'
+    content: |
+      [Unit]
+      Description=KubeEdge EdgeCore
+      After=network.target
+
+      [Service]
+      ExecStart=/usr/local/bin/edgecore --config /etc/kubeedge/config/edgecore.yaml
+      Restart=always
+      RestartSec=10
+
+      [Install]
+      WantedBy=multi-user.target
+  when: not (ansible_facts.services is defined and 'edgecore.service' in ansible_facts.services)
+  notify: restart edgecore
+
+- name: Enable edgecore
+  systemd:
+    name: edgecore
+    enabled: yes
+    state: started
+
+- name: Wait for edgecore to be ready
+  wait_for:
+    path: /etc/kubeedge/config/edgecore.yaml
+    timeout: 300
+
+- name: "KubeEdge | Wait for edge node to be registered in k3s (after join)"
+  shell: |
+    echo "⏳ Waiting for edge node registration (post-join)..."
+    for i in $(seq 120); do
+      if kubectl --kubeconfig=/home/vagrant/kubeconfig get node {{ inventory_hostname }} >/dev/null 2>&1; then
+        echo "✅ Edge node found in cluster (${i}s)";
+        kubectl --kubeconfig=/home/vagrant/kubeconfig get node {{ inventory_hostname }} -o wide;
+        exit 0;
+      fi;
+      sleep 2;
+    done;
+    echo "❌ Edge node not registered in 240s";
+    kubectl --kubeconfig=/home/vagrant/kubeconfig get nodes -o wide || true
+    exit 1
+  delegate_to: "{{ groups['masters'][0] }}"
+  register: k3s_post_join_verify
+  failed_when: k3s_post_join_verify.rc != 0

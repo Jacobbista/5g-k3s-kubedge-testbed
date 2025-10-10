@@ -1,0 +1,78 @@
+ansible_user: vagrant
+ansible_ssh_common_args: "-o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no"
+
+# variabili "rete condivisa" tra Kubernetes e pod MEC (Multus)
+mn_bridge: mn-br0
+mn_subnet: 10.200.0.0/24
+mn_gw: 10.200.0.1
+# versioni / canali
+k3s_channel: stable
+k3s_version: v1.30.6+k3s1
+kubeedge_version: 1.21.0
+
+kubeconfig_path: /home/vagrant/kubeconfig
+
+# IPs Nx centralizzati (statici)
+# N1 AMF static IP (must be within n1-net NAD range)
+amf_n1_ip: 10.201.0.100
+# N2 AMF static IP (must be within n2-net NAD range)
+amf_n2_ip: 10.202.0.100
+# N3 UPF static IPs (must be within n3-net NAD range)
+upf_edge_n3_ip: 10.203.0.100
+upf_cloud_n3_ip: 10.203.0.101
+# N4 SMF/UPF static IPs (must be within n4-net NAD range)
+smf_n4_ip: 10.204.0.100
+upf_edge_n4_ip: 10.204.0.101
+upf_cloud_n4_ip: 10.204.0.102
+
+# Component versions/images (centralized)
+multus_version: 4.0.2
+ovs_cni_version: 0.34.3
+whereabouts_version: 0.7.0
+alpine_image: alpine:3.20
+overlay_mtu: 1450
+
+# Interfacce e NAD (parametrizzabili)
+# N1
+nad_n1_namespace: 5g
+nad_n1_name: n1-net
+n1_interface_expected: n1
+n1_interface_regex: ^(n1|net[0-9]+)$
+
+# N2
+nad_n2_namespace: 5g
+nad_n2_name: n2-net
+n2_interface_expected: n2
+n2_interface_regex: ^(n2|net[0-9]+)$
+
+# N3
+nad_n3_namespace: 5g
+nad_n3_name: n3-net
+n3_interface_expected: n3
+n3_interface_regex: ^(n3|net[0-9]+)$
+
+# N4
+nad_n4_namespace: 5g
+nad_n4_name: n4-net
+n4_interface_expected: n4
+n4_interface_regex: ^(n4|net[0-9]+)$
+
+# N6 Edge (MEC)
+nad_n6e_namespace: mec
+nad_n6e_name: n6-mec-net
+n6e_interface_expected: n6
+n6e_interface_regex: ^(n6|net[0-9]+)$
+
+# N6 Cloud
+nad_n6c_namespace: 5g
+nad_n6c_name: n6-cld-net
+n6c_interface_expected: n6
+n6c_interface_regex: ^(n6|net[0-9]+)$
+
+# Abilita test overlay (pod netshoot)
+test_n1_enabled: false
+test_n2_enabled: false
+test_n3_enabled: false
+test_n4_enabled: false
+test_n6e_enabled: false
+test_n6c_enabled: false

@@ -1,0 +1,89 @@
+---
+# FASE 5: 5G CORE NETWORK FUNCTIONS
+# Deploy 5G Core NFs solo dopo che la rete overlay è pronta
+
+- name: "FASE 5: Create Namespaces"
+  hosts: masters
+  become: yes
+  tasks:
+    - name: "5G Core | Ensure 5g namespace exists"
+      kubernetes.core.k8s:
+        api_version: v1
+        kind: Namespace
+        name: 5g
+        state: present
+        definition:
+          metadata:
+            name: 5g
+            labels:
+              name: 5g-core
+        kubeconfig: "/home/vagrant/kubeconfig"
+      run_once: true
+
+    - name: "5G Core | Ensure mec namespace exists"
+      kubernetes.core.k8s:
+        api_version: v1
+        kind: Namespace
+        name: mec
+        state: present
+        definition:
+          metadata:
+            name: mec
+            labels:
+              name: mec-applications
+        kubeconfig: "/home/vagrant/kubeconfig"
+      run_once: true
+
+- name: "FASE 5: Setup ConfigMaps"
+  hosts: masters
+  become: yes
+  roles:
+    - { role: roles/configmaps_setup, tags: ['configmaps', '5g', 'mec'] }
+
+- name: "FASE 5: Deploy 5G Core Network Functions"
+  hosts: masters
+  become: yes
+  roles:
+    - { role: roles/5g_core_manifests, tags: ['5g', 'core', 'deployment'] }
+
+- name: "FASE 5: Import Subscribers (Open5GS)"
+  hosts: masters
+  become: yes
+  tags:
+    - subscribers
+    - 5g
+  roles:
+    - { role: roles/subscriber_import }
+
+- name: "FASE 5: Verify 5G Core Deployment"
+  hosts: masters
+  become: yes
+  tasks:
+    - name: "5G Core | Get 5G namespace pods"
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Pod
+        namespace: 5g
+        kubeconfig: "/home/vagrant/kubeconfig"
+      register: pods_5g_info
+
+    - name: "5G Core | Get 5G services"
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Service
+        namespace: 5g
+        kubeconfig: "/home/vagrant/kubeconfig"
+      register: services_5g_info
+
+    - name: "5G Core | Display 5G Core deployment status"
+      debug:
+        msg: |
+          ✅ 5G Core Network Functions Deployed
+          📦 Pods: {{ pods_5g_info.resources | length }}
+          {% for pod in pods_5g_info.resources %}
+          - {{ pod.metadata.name }}: {{ pod.status.phase }} ({{ pod.spec.nodeName }})
+          {% endfor %}
+          🌐 Services: {{ services_5g_info.resources | length }}
+          {% for svc in services_5g_info.resources %}
+          - {{ svc.metadata.name }}: {{ svc.spec.type }} ({{ svc.spec.clusterIP }}:{{ svc.spec.ports[0].port }})
+          {% endfor %}

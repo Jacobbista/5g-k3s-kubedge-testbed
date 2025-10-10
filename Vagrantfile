@@ -1,96 +1,122 @@
+# Vagrantfile (pulito, conservativo)
 Vagrant.configure("2") do |config|
-  # Mantieni la chiave "insecure": così l'ansible-controller può accedere con /home/vagrant/.ssh/id_rsa
-  config.ssh.insert_key = false
-  config.vm.box = "ubuntu/jammy64"  # Ubuntu 22.04 LTS
+  config.ssh.insert_key = true
+  config.vm.box_check_update = false
 
-  # Blocco riutilizzabile per scrivere /etc/hosts in modo idempotente e CORRETTO
-  SHARED_HOSTS = <<-SCRIPT
-cat >/tmp/hosts.add <<'EOF'
-192.168.56.10 ansible-controller
-192.168.56.11 kube-master
-192.168.56.12 kube-worker
-192.168.56.13 kubeedge-edge
-EOF
+  nodes = {
+    "master"  => { cpu: 4, mem: 4096, ip: "192.168.56.10", box: "ubuntu/jammy64" },
+    "worker"  => { cpu: 8, mem: 8192, ip: "192.168.56.11", box: "ubuntu/jammy64" },
+    "edge"    => { cpu: 4, mem: 4096, ip: "192.168.56.12", box: "ubuntu/jammy64" },
+    "ansible" => { cpu: 2, mem: 1024, ip: "192.168.56.13", box: "ubuntu/jammy64" }
+  }
 
-for h in ansible-controller kube-master kube-worker kubeedge-edge; do
-  sudo sed -i "/[[:space:]]$h$/d" /etc/hosts
-done
-sudo tee -a /etc/hosts < /tmp/hosts.add
-SCRIPT
+  nodes.each do |name, spec|
+    config.vm.define name, primary: (name == "ansible") do |m|
+      m.vm.hostname = name
+      m.vm.network "private_network", ip: spec[:ip]
+      m.vm.box = spec[:box]
 
-  # kube-master
-  config.vm.define "kube-master" do |m|
-    m.vm.hostname = "kube-master"
-    m.vm.network "private_network", ip: "192.168.56.11"
-    m.vm.provider "virtualbox" do |vb|
-      vb.name = "healthcare-5g-testbed_kube-master"
-      vb.memory = 4096
-      vb.cpus = 2
+      m.vm.provider "virtualbox" do |vb|
+        vb.cpus   = spec[:cpu]
+        vb.memory = spec[:mem]
+        vb.name = "#{name}-5g-k8s-testbed"
+      end
+
+      if name != "ansible"
+        m.vm.synced_folder ".", "/vagrant", disabled: true
+      else
+        m.vm.synced_folder ".", "/vagrant", disabled: false
+        m.vm.synced_folder "ansible/", "/home/vagrant/ansible-ro",
+          create: true,
+          mount_options: ["ro"]
+      end
     end
-    m.vm.provision "shell", inline: SHARED_HOSTS
   end
 
-  # kube-worker
-  config.vm.define "kube-worker" do |w|
-    w.vm.hostname = "kube-worker"
-    w.vm.network "private_network", ip: "192.168.56.12"
-    w.vm.provider "virtualbox" do |vb|
-      vb.name = "healthcare-5g-testbed_kube-worker"
-      vb.memory = 4096
-      vb.cpus = 2
-    end
-    w.vm.provision "shell", inline: SHARED_HOSTS
-  end
+  # Provisioning per la VM "ansible"
+  config.vm.define "ansible", primary: true do |ansible|
+    # --- Blocco root: pacchetti di sistema
+    ansible.vm.provision "shell", privileged: true, inline: <<-SHELL
+      set -euo pipefail
+      export DEBIAN_FRONTEND=noninteractive
+      apt-get update -y
+      apt-get install -y python3-pip git
+    SHELL
 
-  # kubeedge-edge (nodo edge)
-  config.vm.define "kubeedge-edge" do |e|
-    e.vm.hostname = "kubeedge-edge"
-    e.vm.network "private_network", ip: "192.168.56.13"
-    e.vm.provider "virtualbox" do |vb|
-      vb.name = "healthcare-5g-testbed_kubeedge-edge"
-      vb.memory = 4096
-      vb.cpus = 2
-    end
-    e.vm.provision "shell", inline: SHARED_HOSTS
-  end
+    # --- Blocco utente vagrant: ansible + collections + ssh setup
+    ansible.vm.provision "shell", privileged: false, inline: <<-'SHELL'
+      set -euo pipefail
+      export PATH="$HOME/.local/bin:$PATH"
 
-  # ansible-controller (parte per ultimo)
-  config.vm.define "ansible-controller" do |a|
-    a.vm.hostname = "ansible-controller"
-    a.vm.network "private_network", ip: "192.168.56.10"
-    a.vm.provider "virtualbox" do |vb|
-      vb.name = "healthcare-5g-testbed_ansible-controller"
-      vb.memory = 2048
-      vb.cpus = 2
-    end
+      # Ansible per l'utente vagrant
+      python3 -m pip install --user 'ansible==9.7.0'
+      # Client Python per Kubernetes usato da kubernetes.core
+      python3 -m pip install --user 'kubernetes>=29.0.0'
 
-    # /etc/hosts corretto
-    a.vm.provision "shell", inline: SHARED_HOSTS
+      # Collections da requirements.yml SE presente
+      if [ -f /home/vagrant/ansible-ro/requirements.yml ]; then
+        ansible-galaxy collection install -r /home/vagrant/ansible-ro/requirements.yml
+      else
+        echo "[INFO] /home/vagrant/ansible-ro/requirements.yml non trovato: salto install collections"
+      fi
 
-    a.vm.provision "shell", inline: <<-SHELL
-      # Copia le chiavi SSH delle altre VM per Ansible
+      # SSH keys dai private_key Vagrant montati in /vagrant/.vagrant
       mkdir -p /home/vagrant/.ssh
-      sudo cp /home/vagrant/.ssh/authorized_keys /home/vagrant/.ssh/id_rsa.pub
-      sudo wget -O /home/vagrant/.ssh/id_rsa https://raw.githubusercontent.com/hashicorp/vagrant/main/keys/vagrant
-      sudo chown vagrant:vagrant /home/vagrant/.ssh/id_rsa /home/vagrant/.ssh/id_rsa.pub
-      sudo chmod 600 /home/vagrant/.ssh/id_rsa
-      sudo chmod 644 /home/vagrant/.ssh/id_rsa.pub
-      echo "🚀 Installing Ansible & tools..."
-      sudo apt-get update -y
-      sudo apt-get install -y ansible git curl python3-pip
-      sudo pip3 install kubernetes openshift
-      echo "✅ Ansible ready. Running playbook automatically..."
-      cd /vagrant/ansible
-      ansible --version
-      echo "🔧 Waiting for all VMs to be ready..."
-      sleep 30
-      echo "🚀 Starting Healthcare 5G Testbed deployment..."
-      ansible-playbook -i inventory.ini playbook.yml
-      echo "🎉 Healthcare 5G Testbed deployment completed!"
-      echo "📊 Access your cluster: vagrant ssh kube-master"
-      echo "🏥 Check Open5GS: kubectl get pods -n open5gs"
-      echo "🔗 Check KubeEdge: kubectl get nodes -l node-role.kubernetes.io/edge="
+      chmod 700 /home/vagrant/.ssh
+      for vm in master worker edge; do
+        key_path="/vagrant/.vagrant/machines/$vm/virtualbox/private_key"
+        if [ -f "$key_path" ]; then
+          cp "$key_path" "/home/vagrant/.ssh/${vm}_key"
+          chmod 600 "/home/vagrant/.ssh/${vm}_key"
+          echo "Copiata chiave SSH per $vm"
+        else
+          echo "[WARN] Chiave non trovata per $vm (path: $key_path)"
+        fi
+      done
+
+      # Usa il tuo ssh_config già versionato nel repo
+      cp /home/vagrant/ansible-ro/ssh_config /home/vagrant/.ssh/config
+      chmod 600 /home/vagrant/.ssh/config
+
+      # Workspace Ansible (scrivibile)
+      mkdir -p /home/vagrant/ansible-work/{logs,cache,tmp,retry}
+      cp /home/vagrant/ansible-ro/ansible.cfg /home/vagrant/ansible-work/ansible.cfg
+      chmod 644 /home/vagrant/ansible-work/ansible.cfg
+
+      # Aggiungi PATH a .bashrc per sessioni interattive
+      if ! grep -q 'export PATH=.*.local/bin' ~/.bashrc; then
+        echo 'export PATH=$HOME/.local/bin:$PATH' >> ~/.bashrc
+      fi
+    SHELL
+
+    # --- Run finale (sempre): attesa SSH + playbook
+    ansible.vm.provision "shell", run: "always", privileged: false, inline: <<-'SHELL'
+      set -euo pipefail
+      export PATH="$HOME/.local/bin:$PATH"
+      export ANSIBLE_CONFIG=/home/vagrant/ansible-work/ansible.cfg
+
+      echo "=== Attendo che le VM siano pronte per SSH ==="
+      wait_ssh() {
+        local host="$1"
+        local tries=15
+        for i in $(seq 1 $tries); do
+          if ssh -o ConnectTimeout=10 -o BatchMode=yes "$host" 'echo OK' >/dev/null 2>&1; then
+            echo "$host raggiungibile (tentativo $i)"
+            return 0
+          fi
+          echo "Tentativo $i: $host non raggiungibile, aspetto..."
+          sleep 10
+        done
+        echo "ERRORE: $host non raggiungibile dopo $tries tentativi"
+        return 1
+      }
+
+      for vm in master worker edge; do
+        wait_ssh "$vm"
+      done
+
+      echo "=== Eseguo il playbook a fasi ==="
+      ansible-playbook /home/vagrant/ansible-ro/phases/00-main-playbook.yml
     SHELL
   end
 end
-

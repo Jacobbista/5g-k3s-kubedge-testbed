@@ -1,0 +1,447 @@
+---
+- name: Create temp MongoDB config file on master
+  copy:
+    src: "{{ role_path }}/../../configs/mongodb.conf"
+    dest: /tmp/mongodb.conf
+    mode: '0644'
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Apply MongoDB ConfigMap from file (default)
+  kubernetes.core.k8s:
+    state: present
+    kubeconfig: "/home/vagrant/kubeconfig"
+    definition:
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: mongodb-config
+        namespace: 5g
+      data:
+        mongodb.conf: "{{ lookup('file', role_path + '/../../configs/mongodb.conf') }}"
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Copy scripts to master for ConfigMap creation
+  copy:
+    src: "{{ role_path }}/../../scripts/"
+    dest: /tmp/nf-scripts/
+    mode: '0755'
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Init nf-scripts data map
+  set_fact:
+    nf_scripts_data: {}
+
+- name: Build nf-scripts data map from role scripts
+  set_fact:
+    nf_scripts_data: "{{ nf_scripts_data | combine({ (item | basename): lookup('file', item) }) }}"
+  loop: "{{ lookup('fileglob', role_path + '/../../scripts/*', wantlist=True) }}"
+
+- name: Apply ConfigMap for NF init scripts via API
+  kubernetes.core.k8s:
+    state: present
+    kubeconfig: "/home/vagrant/kubeconfig"
+    definition:
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: nf-scripts
+        namespace: 5g
+      data: "{{ nf_scripts_data }}"
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+
+- name: Create temp NRF config file on master
+  copy:
+    src: "{{ role_path }}/../../configs/nrf.yaml"
+    dest: /tmp/nrf_cfg.yaml
+    mode: '0644'
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Apply NRF ConfigMap from file (preserve formatting)
+  kubernetes.core.k8s:
+    state: present
+    kubeconfig: "/home/vagrant/kubeconfig"
+    definition:
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: nrf-config
+        namespace: 5g
+      data:
+        nrf.yaml: "{{ lookup('file', role_path + '/../../configs/nrf.yaml') }}"
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Create temp AMF config file on master
+  copy:
+    src: "{{ role_path }}/../../configs/amf.yaml"
+    dest: /tmp/amf_cfg.yaml
+    mode: '0644'
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Get AMF config checksum
+  stat:
+    path: /tmp/amf_cfg.yaml
+  register: amf_config_stat
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Apply AMF ConfigMap (stable name)
+  kubernetes.core.k8s:
+    state: present
+    kubeconfig: "/home/vagrant/kubeconfig"
+    definition:
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: amf-config
+        namespace: 5g
+      data:
+        amf.yaml: "{{ lookup('file', role_path + '/../../configs/amf.yaml') }}"
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Clear AMF ConfigMap name fact (use stable name)
+  set_fact:
+    amf_configmap_name: "amf-config"
+  run_once: true
+
+- name: Create temp SMF config file on master
+  copy:
+    src: "{{ role_path }}/../../configs/smf.yaml"
+    dest: /tmp/smf_cfg.yaml
+    mode: '0644'
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Get SMF config checksum
+  stat:
+    path: /tmp/smf_cfg.yaml
+  register: smf_config_stat
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Apply SMF ConfigMap (stable name)
+  kubernetes.core.k8s:
+    state: present
+    kubeconfig: "/home/vagrant/kubeconfig"
+    definition:
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: smf-config
+        namespace: 5g
+      data:
+        smf.yaml: "{{ lookup('file', role_path + '/../../configs/smf.yaml') }}"
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Clear SMF ConfigMap name fact (use stable name)
+  set_fact:
+    smf_configmap_name: "smf-config"
+  run_once: true
+
+- name: Create temp UPF Edge config file on master
+  copy:
+    src: "{{ role_path }}/../../configs/upf_edge.yaml"
+    dest: /tmp/upf_edge_cfg.yaml
+    mode: '0644'
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Apply UPF Edge ConfigMap from file (preserve formatting)
+  kubernetes.core.k8s:
+    state: present
+    kubeconfig: "/home/vagrant/kubeconfig"
+    definition:
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: upf-edge-config
+        namespace: 5g
+      data:
+        upf.yaml: "{{ lookup('file', role_path + '/../../configs/upf_edge.yaml') }}"
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Create temp UPF Cloud config file on master
+  copy:
+    src: "{{ role_path }}/../../configs/upf_cloud.yaml"
+    dest: /tmp/upf_cloud_cfg.yaml
+    mode: '0644'
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Apply UPF Cloud ConfigMap from file (preserve formatting)
+  kubernetes.core.k8s:
+    state: present
+    kubeconfig: "/home/vagrant/kubeconfig"
+    definition:
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: upf-cloud-config
+        namespace: 5g
+      data:
+        upf.yaml: "{{ lookup('file', role_path + '/../../configs/upf_cloud.yaml') }}"
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Create temp UDM config file on master
+  copy:
+    src: "{{ role_path }}/../../configs/udm.yaml"
+    dest: /tmp/udm_cfg.yaml
+    mode: '0644'
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Get UDM config checksum
+  stat:
+    path: /tmp/udm_cfg.yaml
+  register: udm_config_stat
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Apply UDM ConfigMap (stable name)
+  kubernetes.core.k8s:
+    state: present
+    kubeconfig: "/home/vagrant/kubeconfig"
+    definition:
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: udm-config
+        namespace: 5g
+      data:
+        udm.yaml: "{{ lookup('file', role_path + '/../../configs/udm.yaml') }}"
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Clear UDM ConfigMap name fact (use stable name)
+  set_fact:
+    udm_configmap_name: "udm-config"
+  run_once: true
+
+- name: Create temp UDR config file on master
+  copy:
+    src: "{{ role_path }}/../../configs/udr.yaml"
+    dest: /tmp/udr_cfg.yaml
+    mode: '0644'
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Get UDR config checksum
+  stat:
+    path: /tmp/udr_cfg.yaml
+  register: udr_config_stat
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Apply UDR ConfigMap (stable name)
+  kubernetes.core.k8s:
+    state: present
+    kubeconfig: "/home/vagrant/kubeconfig"
+    definition:
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: udr-config
+        namespace: 5g
+      data:
+        udr.yaml: "{{ lookup('file', role_path + '/../../configs/udr.yaml') }}"
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Clear UDR ConfigMap name fact (use stable name)
+  set_fact:
+    udr_configmap_name: "udr-config"
+  run_once: true
+
+- name: Create temp PCF config file on master
+  copy:
+    src: "{{ role_path }}/../../configs/pcf.yaml"
+    dest: /tmp/pcf_cfg.yaml
+    mode: '0644'
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Get PCF config checksum
+  stat:
+    path: /tmp/pcf_cfg.yaml
+  register: pcf_config_stat
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Apply PCF ConfigMap (stable name)
+  kubernetes.core.k8s:
+    state: present
+    kubeconfig: "/home/vagrant/kubeconfig"
+    definition:
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: pcf-config
+        namespace: 5g
+      data:
+        pcf.yaml: "{{ lookup('file', role_path + '/../../configs/pcf.yaml') }}"
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Clear PCF ConfigMap name fact (use stable name)
+  set_fact:
+    pcf_configmap_name: "pcf-config"
+  run_once: true
+
+- name: Create temp BSF config file on master
+  copy:
+    src: "{{ role_path }}/../../configs/bsf.yaml"
+    dest: /tmp/bsf_cfg.yaml
+    mode: '0644'
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Get BSF config checksum
+  stat:
+    path: /tmp/bsf_cfg.yaml
+  register: bsf_config_stat
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Apply BSF ConfigMap (stable name)
+  kubernetes.core.k8s:
+    state: present
+    kubeconfig: "/home/vagrant/kubeconfig"
+    definition:
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: bsf-config
+        namespace: 5g
+      data:
+        bsf.yaml: "{{ lookup('file', role_path + '/../../configs/bsf.yaml') }}"
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Clear BSF ConfigMap name fact (use stable name)
+  set_fact:
+    bsf_configmap_name: "bsf-config"
+  run_once: true
+
+- name: Create temp NSSF config file on master
+  copy:
+    src: "{{ role_path }}/../../configs/nssf.yaml"
+    dest: /tmp/nssf_cfg.yaml
+    mode: '0644'
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Get NSSF config checksum
+  stat:
+    path: /tmp/nssf_cfg.yaml
+  register: nssf_config_stat
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Apply NSSF ConfigMap (stable name)
+  kubernetes.core.k8s:
+    state: present
+    kubeconfig: "/home/vagrant/kubeconfig"
+    definition:
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: nssf-config
+        namespace: 5g
+      data:
+        nssf.yaml: "{{ lookup('file', role_path + '/../../configs/nssf.yaml') }}"
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Clear NSSF ConfigMap name fact (use stable name)
+  set_fact:
+    nssf_configmap_name: "nssf-config"
+  run_once: true
+
+- name: Create temp AUSF config file on master
+  copy:
+    src: "{{ role_path }}/../../configs/ausf.yaml"
+    dest: /tmp/ausf_cfg.yaml
+    mode: '0644'
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Get AUSF config checksum
+  stat:
+    path: /tmp/ausf_cfg.yaml
+  register: ausf_config_stat
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Apply AUSF ConfigMap (stable name)
+  kubernetes.core.k8s:
+    state: present
+    kubeconfig: "/home/vagrant/kubeconfig"
+    definition:
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: ausf-config
+        namespace: 5g
+      data:
+        ausf.yaml: "{{ lookup('file', role_path + '/../../configs/ausf.yaml') }}"
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Clear AUSF ConfigMap name fact (use stable name)
+  set_fact:
+    ausf_configmap_name: "ausf-config"
+  run_once: true
+
+# gNB and UE ConfigMaps are handled in phase 6 (UERANSIM)
+
+- name: Create temp MEC config file on master
+  copy:
+    src: "{{ role_path }}/../../configs/mec.conf"
+    dest: /tmp/mec.conf
+    mode: '0644'
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Apply MEC ConfigMap from file (default)
+  kubernetes.core.k8s:
+    state: present
+    kubeconfig: "/home/vagrant/kubeconfig"
+    definition:
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: mec-config
+        namespace: mec
+      data:
+        mec.conf: "{{ lookup('file', role_path + '/../../configs/mec.conf') }}"
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: ConfigMaps already applied via --from-file tasks
+  shell: |
+    true
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Verify ConfigMaps
+  shell: kubectl get configmaps -n 5g && echo "---" && kubectl get configmaps -n mec
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+  register: configmaps_status
+
+- name: Display ConfigMaps status
+  debug:
+    var: configmaps_status.stdout_lines
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true

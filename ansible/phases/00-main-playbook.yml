@@ -1,0 +1,299 @@
+---
+# MAIN PLAYBOOK - 5G KUBERNETES TESTBED
+# Primary orchestrator that executes all phases in sequence with validation
+
+- name: "🚀 5G KUBERNETES TESTBED DEPLOYMENT"
+  hosts: localhost
+  gather_facts: yes
+  vars:
+    deployment_start_time: "{{ ansible_date_time.iso8601 }}"
+  tasks:
+    - name: "Deps | Ensure python3-pip on master"
+      apt:
+        name: python3-pip
+        state: present
+        update_cache: no
+      delegate_to: "{{ groups['masters'][0] }}"
+      run_once: true
+      tags:
+        - deps
+
+    - name: "Deps | Ensure Python Kubernetes client on master"
+      pip:
+        name: "kubernetes>=29.0.0"
+        executable: pip3
+      delegate_to: "{{ groups['masters'][0] }}"
+      run_once: true
+      tags:
+        - deps
+    - name: "Display deployment phases and start time"
+      debug:
+        msg: |
+          🚀 5G KUBERNETES TESTBED DEPLOYMENT
+          ====================================
+          Start Time: {{ deployment_start_time }}
+
+          Deployment phases:
+          1️⃣  Infrastructure Setup
+          2️⃣  Kubernetes Cluster (k3s)
+          3️⃣  KubeEdge Integration
+          4️⃣  Overlay Network (OVS + Multus)
+          5️⃣  5G Core Network Functions
+          6️⃣  UERANSIM & MEC
+
+          To run a single phase:
+          ansible-playbook phases/0X-phase-name/playbook.yml
+
+- name: "PHASE 1: Infrastructure Setup"
+  import_playbook: 01-infrastructure/playbook.yml
+  vars:
+    phase_name: "Infrastructure Setup"
+    phase_number: 1
+  tags:
+    - phase1
+    - infrastructure
+
+- name: "PHASE 1: Validate Infrastructure Setup"
+  hosts: localhost
+  gather_facts: no
+  tags:
+    - phase1
+    - infrastructure
+  tasks:
+    - name: "Validation | Check if all nodes are reachable"
+      wait_for_connection:
+        timeout: 60
+      delegate_to: "{{ item }}"
+      loop: "{{ groups['all'] | difference(['ansible']) }}"
+      register: connectivity_check
+      failed_when: connectivity_check.failed | default(false)
+
+    - name: "Validation | Infrastructure setup completed successfully"
+      debug:
+        msg: "✅ PHASE 1: Infrastructure Setup completed successfully"
+
+- name: "PHASE 2: Kubernetes Cluster Setup"
+  import_playbook: 02-kubernetes/playbook.yml
+  vars:
+    phase_name: "Kubernetes Cluster Setup"
+    phase_number: 2
+  tags:
+    - phase2
+    - kubernetes
+
+- name: "PHASE 2: Validate Kubernetes Cluster"
+  hosts: masters
+  gather_facts: no
+  tags:
+    - phase2
+    - kubernetes
+  tasks:
+    - name: "Validation | Get Nodes via kubernetes.core"
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Node
+        kubeconfig: "/home/vagrant/kubeconfig"
+      register: nodes_info
+
+    - name: "Validation | Assert 3 Ready nodes"
+      assert:
+        that:
+          - nodes_info.resources | map(attribute='status.conditions') | map('selectattr','type','equalto','Ready') | map('selectattr','status','equalto','True') | select('length') | list | length == 3
+
+    - name: "Validation | Kubernetes cluster setup completed successfully"
+      debug:
+        msg: "✅ PHASE 2: Kubernetes Cluster Setup completed successfully"
+
+- name: "PHASE 3: KubeEdge Integration"
+  import_playbook: 03-kubeedge/playbook.yml
+  vars:
+    phase_name: "KubeEdge Integration"
+    phase_number: 3
+  tags:
+    - phase3
+    - kubeedge
+
+- name: "PHASE 3: Validate KubeEdge Integration"
+  hosts: masters
+  gather_facts: no
+  tags:
+    - phase3
+    - kubeedge
+  tasks:
+    - name: "Validation | Get KubeEdge pods"
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Pod
+        namespace: kubeedge
+        kubeconfig: "/home/vagrant/kubeconfig"
+      register: kubeedge_pods_info
+
+    - name: "Validation | Assert some KubeEdge pods are Running"
+      assert:
+        that:
+          - kubeedge_pods_info.resources | selectattr('status.phase','equalto','Running') | list | length > 0
+
+    - name: "Validation | KubeEdge integration completed successfully"
+      debug:
+        msg: "✅ PHASE 3: KubeEdge Integration completed successfully"
+
+- name: "PHASE 4: Overlay Network Setup"
+  import_playbook: 04-overlay-network/playbook.yml
+  vars:
+    phase_name: "Overlay Network Setup"
+    phase_number: 4
+  tags:
+    - phase4
+    - overlay
+    - network
+
+- name: "PHASE 4: Validate Overlay Network"
+  hosts: masters
+  gather_facts: no
+  tags:
+    - phase4
+    - overlay
+    - network
+  tasks:
+    - name: "Validation | Get OVS DaemonSets"
+      kubernetes.core.k8s_info:
+        api_version: apps/v1
+        kind: DaemonSet
+        namespace: kube-system
+        kubeconfig: "/home/vagrant/kubeconfig"
+      register: ovs_daemonsets_info
+
+    - name: "Validation | Assert OVS DaemonSets ready"
+      assert:
+        that:
+          # We expect one Ready pod for each DS (worker and edge) → sum == 2
+          - (
+            ovs_daemonsets_info.resources
+            | selectattr('metadata.name', 'match', 'ds-net-setup.*')
+            | map(attribute='status.numberReady')
+            | map('int')
+            | sum
+            ) == 2
+
+    - name: "Validation | Overlay network setup completed successfully"
+      debug:
+        msg: "✅ PHASE 4: Overlay Network Setup completed successfully"
+
+- name: "PHASE 5: 5G Core Network Functions"
+  import_playbook: 05-5g-core/playbook.yml
+  vars:
+    phase_name: "5G Core Network Functions"
+    phase_number: 5
+  tags:
+    - phase5
+    - 5g
+    - core
+
+- name: "PHASE 5: Validate 5G Core Network Functions"
+  hosts: masters
+  gather_facts: no
+  tags:
+    - phase5
+    - 5g
+    - core
+  tasks:
+    - name: "Validation | Get 5G Core pods"
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Pod
+        namespace: 5g
+        kubeconfig: "/home/vagrant/kubeconfig"
+      register: core_pods_info
+
+    - name: "Validation | Assert 5G Core pods threshold"
+      assert:
+        that:
+          - core_pods_info.resources | selectattr('status.phase','equalto','Running') | list | length >= 5
+
+    - name: "Validation | 5G Core Network Functions completed successfully"
+      debug:
+        msg: "✅ PHASE 5: 5G Core Network Functions completed successfully"
+
+- name: "PHASE 6: UERANSIM & MEC Setup"
+  import_playbook: 06-ueransim-mec/playbook.yml
+  vars:
+    phase_name: "UERANSIM & MEC Setup"
+    phase_number: 6
+  tags:
+    - phase6
+    - ueransim
+    - mec
+
+- name: "PHASE 6: Validate UERANSIM & MEC Setup"
+  hosts: masters
+  gather_facts: no
+  tags:
+    - phase6
+    - ueransim
+    - mec
+  tasks:
+    - name: "Validation | Get UERANSIM pods"
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Pod
+        namespace: 5g
+        kubeconfig: "/home/vagrant/kubeconfig"
+      register: ueransim_pods_info
+
+    - name: "Validation | Compute gNB Running count"
+      set_fact:
+        gnb_running_count: >-
+          {{
+            ueransim_pods_info.resources | default([])
+            | selectattr('status.phase','equalto','Running')
+            | selectattr('metadata.labels.app','defined')
+            | selectattr('metadata.labels.app','equalto','gnb')
+            | list | length
+          }}
+
+    - name: "Validation | Compute UE Running count"
+      set_fact:
+        ue_running_count: >-
+          {{
+            ueransim_pods_info.resources | default([])
+            | selectattr('status.phase','equalto','Running')
+            | selectattr('metadata.labels.app','defined')
+            | selectattr('metadata.labels.app','equalto','ue')
+            | list | length
+          }}
+
+    - name: "Validation | Assert gNB Running >= 1"
+      assert:
+        that:
+          - (gnb_running_count | int) >= 1
+
+    - name: "Validation | Assert UE Running >= 1"
+      assert:
+        that:
+          - (ue_running_count | int) >= 1
+
+    - name: "Validation | UERANSIM & MEC Setup completed successfully"
+      debug:
+        msg: "✅ PHASE 6: UERANSIM & MEC Setup completed successfully"
+
+- name: "🎉 DEPLOYMENT COMPLETED SUCCESSFULLY"
+  hosts: localhost
+  gather_facts: no
+  tasks:
+    - name: "Final | Display deployment completion"
+      debug:
+        msg: |
+          🎉 5G KUBERNETES TESTBED DEPLOYMENT COMPLETED
+          =============================================
+          Start Time: {{ deployment_start_time }}
+          End Time: {{ ansible_date_time.iso8601 }}
+
+          All phases completed successfully:
+          ✅ Infrastructure Setup
+          ✅ Kubernetes Cluster (k3s)
+          ✅ KubeEdge Integration
+          ✅ Overlay Network (OVS + Multus)
+          ✅ 5G Core Network Functions
+          ✅ UERANSIM & MEC
+
+          Testbed is ready for 5G testing!
