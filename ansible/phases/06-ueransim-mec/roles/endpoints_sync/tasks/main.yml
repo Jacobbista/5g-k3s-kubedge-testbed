@@ -1,0 +1,47 @@
+---
+# Deploy RBAC + CronJob to sync gNB Endpoints with Multus N2 IPs
+
+- name: Render RBAC manifest
+  template:
+    src: templates/rbac.yaml.j2
+    dest: /tmp/endpoints-sync-rbac.yaml
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Apply RBAC
+  kubernetes.core.k8s:
+    state: present
+    src: /tmp/endpoints-sync-rbac.yaml
+    kubeconfig: "{{ kubeconfig_path }}"
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Create scripts ConfigMap
+  kubernetes.core.k8s:
+    state: present
+    kubeconfig: "{{ kubeconfig_path }}"
+    definition:
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: endpoints-sync-scripts
+        namespace: "{{ namespace }}"
+      data:
+        sync_endpoints.py: "{{ lookup('template', 'templates/sync_endpoints.py.j2') }}"
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Render CronJob manifest
+  template:
+    src: templates/cronjob.yaml.j2
+    dest: /tmp/endpoints-sync-cronjob.yaml
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Apply CronJob
+  kubernetes.core.k8s:
+    state: present
+    src: /tmp/endpoints-sync-cronjob.yaml
+    kubeconfig: "{{ kubeconfig_path }}"
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true

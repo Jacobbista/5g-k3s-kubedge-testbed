@@ -1,0 +1,90 @@
+---
+- name: Fetch join token from master
+  slurp:
+    src: "{{ k3s_token_src_on_master }}"
+  delegate_to: "{{ groups['masters'][0] }}"
+  register: token_b64
+
+- name: Ensure k3s config dir
+  file:
+    path: "{{ k3s_config_dir }}"
+    state: directory
+    mode: "0755"
+
+- name: Detect Flannel interface from ansible_host IP
+  set_fact:
+    k3s_flannel_iface: >-
+      {{
+        ansible_interfaces
+        | map('regex_replace', '^(.*)$', 'ansible_\1')
+        | map('extract', hostvars[inventory_hostname])
+        | selectattr('ipv4', 'defined')
+        | selectattr('ipv4.address', 'equalto', ansible_host)
+        | map(attribute='device')
+        | first
+        | default('eth1')
+      }}
+
+- name: Download k3s binary
+  get_url:
+    url: "https://github.com/k3s-io/k3s/releases/download/{{ k3s_version }}/k3s"
+    dest: "{{ k3s_install_dir }}/k3s"
+    mode: "0755"
+    checksum: "sha256:https://github.com/k3s-io/k3s/releases/download/{{ k3s_version }}/sha256sum-amd64.txt"
+  retries: 3
+  delay: 5
+
+- name: Stop existing k3s service if running
+  systemd:
+    name: k3s
+    state: stopped
+  failed_when: false
+
+- name: Create k3s systemd service for agent
+  template:
+    src: k3s-agent.service.j2
+    dest: /etc/systemd/system/k3s.service
+    mode: "0644"
+
+- name: Create k3s environment file
+  template:
+    src: k3s.service.env.j2
+    dest: /etc/systemd/system/k3s.service.env
+    mode: "0600"
+
+- name: Reload systemd daemon
+  systemd:
+    daemon_reload: yes
+
+- name: Enable and start k3s service
+  systemd:
+    name: k3s
+    enabled: yes
+    state: started
+
+- name: Wait for Node object
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Node
+    name: "{{ inventory_hostname }}"
+    kubeconfig: "{{ kubeconfig_path }}"
+  delegate_to: "{{ groups['masters'][0] }}"
+  register: node_info
+  retries: 36
+  delay: 5
+  until: node_info.resources is defined and node_info.resources | length == 1
+
+- name: Set node role label key
+  set_fact:
+    node_role_label: "node-role.kubernetes.io/{{ node_type }}"
+
+- name: Label node role
+  kubernetes.core.k8s:
+    api_version: v1
+    kind: Node
+    name: "{{ inventory_hostname }}"
+    kubeconfig: "{{ kubeconfig_path }}"
+    definition:
+      metadata:
+        labels: "{{ {node_role_label: '', 'node-type': node_type} }}"
+  delegate_to: "{{ groups['masters'][0] }}"

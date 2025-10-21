@@ -1,0 +1,25 @@
+---
+# Validation defaults for 5G Core deployment
+kubeconfig_path: "/home/vagrant/kubeconfig"
+namespace_5g: "5g"
+namespace_mec: "mec"
+
+# Expected minimum number of running pods per component
+expected_pods:
+  mongodb: 1
+  nrf: 1
+  amf: 1
+  smf: 1
+  pcf: 1
+  bsf: 1
+  udm: 1
+  udr: 1
+  nssf: 1
+  ausf: 1
+  upf-edge: 1
+  upf-cloud: 1
+
+# Validation timeouts
+pod_ready_timeout: 300
+pod_ready_delay: 10
+pod_ready_retries: 30

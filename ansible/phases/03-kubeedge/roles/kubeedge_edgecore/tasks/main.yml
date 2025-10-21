@@ -1,0 +1,68 @@
+---
+# KUBEEDGE EDGECORE NODE SETUP
+# Install KubeEdge EdgeCore on the edge node and connect to the CloudCore
+- name: Copy token from worker
+  slurp:
+    src: /home/vagrant/edge_token
+  delegate_to: "{{ groups['workers'][0] }}"
+  register: edge_token
+
+- name: Write edge token
+  copy:
+    content: "{{ edge_token.content | b64decode | trim }}"
+    dest: /home/vagrant/edge_token
+    mode: "0600"
+    owner: vagrant
+    group: vagrant
+
+- name: Wait for CloudCore port on worker
+  wait_for:
+    host: "{{ hostvars[groups['workers'][0]]['ansible_host'] }}"
+    port: "{{ cloudcore_port }}"
+    delay: 2
+    timeout: 120
+
+- name: keadm join (idempotent)
+  shell: >
+    timeout 300 keadm join
+    --cloudcore-ipport={{ hostvars[groups['workers'][0]]['ansible_host'] }}:{{ cloudcore_port }}
+    --kubeedge-version={{ kubeedge_version }}
+    --token=$(cat /home/vagrant/edge_token)
+    --remote-runtime-endpoint=unix:///run/containerd/containerd.sock
+    --cgroupdriver=systemd
+  args:
+    creates: /etc/kubeedge/config/edgecore.yaml
+
+- name: Ensure edgecore service
+  copy:
+    dest: /etc/systemd/system/edgecore.service
+    mode: "0644"
+    content: |
+      [Unit]
+      Description=KubeEdge EdgeCore
+      After=network.target
+      [Service]
+      ExecStart=/usr/local/bin/edgecore --config /etc/kubeedge/config/edgecore.yaml
+      Restart=always
+      RestartSec=10
+      [Install]
+      WantedBy=multi-user.target
+
+- name: Enable+start edgecore
+  systemd:
+    name: edgecore
+    enabled: yes
+    state: started
+
+- name: Verify edge node is registered
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Node
+    name: "{{ inventory_hostname }}"
+    kubeconfig: "{{ kubeconfig_path }}"
+  delegate_to: "{{ groups['masters'][0] }}"
+  register: edge_node
+  retries: 60
+  delay: 2
+  until: edge_node.resources | length == 1
+# Handlers

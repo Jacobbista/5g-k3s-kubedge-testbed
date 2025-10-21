@@ -1,70 +1,82 @@
----
-# FASE 4: OVERLAY NETWORK SETUP
-# Setup OVS bridges e Multus CNI per interfacce 5G
-
-- name: "FASE 4: Install CNI binaries on nodes"
+- name: "PHASE 4 | Install CNI binaries"
   hosts: all:!masters:!ansible
   become: yes
   roles:
-    - { role: roles/cni_binaries_setup, tags: ['cni', 'network', 'binaries'] }
+    - roles/cni_binaries_setup
 
-- name: "FASE 4: Setup OVS Network Infrastructure"
-  hosts: masters
-  become: yes
-  roles:
-    - { role: roles/ovs_network_setup, tags: ['ovs', 'network', 'overlay'] }
-
-- name: "FASE 4: Install Multus CNI"
-  hosts: masters
-  become: yes
-  roles:
-    - { role: roles/multus_install, tags: ['multus', 'cni', 'network'] }
-
-- name: "FASE 4: Verify Overlay Network Components"
+- name: "PHASE 4 | Setup OVS overlay"
   hosts: masters
   become: yes
   tags:
-    - verify
+    - phase4
+    - overlay
+  roles:
+    - roles/ovs_network_setup
+
+- name: "PHASE 4 | Install Multus + NADs"
+  hosts: masters
+  become: yes
+  tags:
+    - multus
+    - nad
+  roles:
+    - roles/multus_install
+
+- name: "PHASE 4 | Setup Per-Cell Networks"
+  hosts: masters
+  become: no
+  tags:
+    - phase4
+    - cell_networks
+  roles:
+    - roles/cell_network_setup
+
+- name: "PHASE 4 | Verify"
+  hosts: masters
+  become: yes
   tasks:
-    - name: "Overlay | Get OVS DaemonSets"
+    - name: Multus worker DS ready
+      kubernetes.core.k8s_info:
+        api_version: apps/v1
+        kind: DaemonSet
+        name: multus-worker
+        namespace: kube-system
+        kubeconfig: "/home/vagrant/kubeconfig"
+      register: multus_worker_info
+      until: (multus_worker_info.resources|length)>0 and (multus_worker_info.resources.0.status.numberReady|int) >= 1
+      retries: 24
+      delay: 5
+
+    - name: Multus edge DS ready
+      kubernetes.core.k8s_info:
+        api_version: apps/v1
+        kind: DaemonSet
+        name: multus-edge
+        namespace: kube-system
+        kubeconfig: "/home/vagrant/kubeconfig"
+      register: multus_edge_info
+      until: (multus_edge_info.resources|length)>0 and (multus_edge_info.resources.0.status.numberReady|int) >= 1
+      retries: 24
+      delay: 5
+
+    - name: OVS DS present and running
       kubernetes.core.k8s_info:
         api_version: apps/v1
         kind: DaemonSet
         namespace: kube-system
         kubeconfig: "/home/vagrant/kubeconfig"
-      register: daemonsets_info
+      register: ds_all
+    - assert:
+        that:
+          - (ds_all.resources | selectattr('metadata.name','match','^ds-net-setup-(worker|edge)$') | list | length) == 2
+          - (ds_all.resources | selectattr('metadata.name','match','^ds-net-setup-(worker|edge)$') | map(attribute='status.numberReady') | map('int') | sum) == 2
 
-    - name: "Overlay | Get Multus DaemonSet"
-      kubernetes.core.k8s_info:
-        api_version: apps/v1
-        kind: DaemonSet
-        name: kube-multus-ds
-        namespace: kube-system
-        kubeconfig: "/home/vagrant/kubeconfig"
-      register: multus_ds_info
-
-    - name: "Overlay | Get NetworkAttachmentDefinitions"
+    - name: NADs present
       kubernetes.core.k8s_info:
         api_version: k8s.cni.cncf.io/v1
         kind: NetworkAttachmentDefinition
         kubeconfig: "/home/vagrant/kubeconfig"
       register: nads_info
-
-    - name: "Overlay | Assert readiness conditions"
-      assert:
+    - assert:
         that:
-          - multus_ds_info.resources[0].status.numberReady | int == 2
-          - (daemonsets_info.resources | selectattr('metadata.name','match','ds-net-setup.*') | list | length) == 2
-          - (daemonsets_info.resources | selectattr('metadata.name','match','ds-net-setup.*') | map(attribute='status.numberReady') | map('int') | sum) == 2
           - nads_info.resources | length >= 6
-
-    - name: "Overlay | Display overlay network status"
-      debug:
-        msg: |
-          ✅ Overlay Network Setup Complete
-          📦 Multus DaemonSet: {{ multus_ds_info.resources[0].status.numberReady }}/2 Ready
-          🔗 OVS DaemonSets: {{ daemonsets_info.resources | selectattr('metadata.name', 'match', 'ds-net-setup.*') | map(attribute='status.numberReady') | list | join('/') }}/2 Ready
-          🌐 NetworkAttachmentDefinitions: {{ nads_info.resources | length }} configured
-          {% for nad in nads_info.resources %}
-          - {{ nad.metadata.namespace }}/{{ nad.metadata.name }}
-          {% endfor %}

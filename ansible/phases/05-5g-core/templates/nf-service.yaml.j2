@@ -1,0 +1,17 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ nf.name }}
+  namespace: {{ namespace_5g }}
+spec:
+  selector:
+    app: {{ nf.name }}
+  ports:
+{% for port in nf.ports %}
+  - protocol: {{ port.protocol | default('TCP') }}
+    port: {{ port.port }}
+    targetPort: {{ port.port }}
+    name: {{ port.name }}
+{% endfor %}
+  type: ClusterIP
+

@@ -1,0 +1,85 @@
+---
+# NETWORK FUNCTIONS DEPLOYMENT
+# Deploy 5G Core NFs using templates (no inline YAML)
+
+- name: Load topology for per-cell AMF interfaces
+  include_vars:
+    file: "{{ playbook_dir }}/../06-ueransim-mec/vars/topology.yml"
+  run_once: true
+
+- name: Build per-cell N2 networks for AMF
+  set_fact:
+    amf_cell_n2_networks: "{{ amf_cell_n2_networks | default([]) + [{'name': 'n2-cell-' ~ item.id}] }}"
+  loop: "{{ ueransim_topology.cells }}"
+  loop_control:
+    label: "cell-{{ item.id }}"
+  run_once: true
+
+- name: Update network_functions with AMF per-cell networks
+  set_fact:
+    network_functions_updated: "{{ network_functions_updated | default([]) + [item | combine({'networks': item.networks + amf_cell_n2_networks}) if item.name == 'amf' else item] }}"
+  loop: "{{ network_functions }}"
+  loop_control:
+    label: "{{ item.name }}"
+  run_once: true
+
+- name: Replace network_functions with updated version
+  set_fact:
+    network_functions: "{{ network_functions_updated }}"
+  run_once: true
+
+- name: Deploy MongoDB
+  kubernetes.core.k8s:
+    state: present
+    kubeconfig: "{{ kubeconfig_path }}"
+    template: "{{ playbook_dir }}/templates/mongodb-deployment.yaml.j2"
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Deploy MongoDB Service
+  kubernetes.core.k8s:
+    state: present
+    kubeconfig: "{{ kubeconfig_path }}"
+    template: "{{ playbook_dir }}/templates/mongodb-service.yaml.j2"
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Wait for MongoDB to be ready
+  kubernetes.core.k8s_info:
+    api_version: apps/v1
+    kind: Deployment
+    name: mongodb
+    namespace: "{{ namespace_5g }}"
+    kubeconfig: "{{ kubeconfig_path }}"
+  register: mongodb_status
+  retries: 30
+  delay: 10
+  until: >-
+    mongodb_status.resources | length > 0 and
+    mongodb_status.resources[0].status.availableReplicas | default(0) >= 1
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Deploy Network Function Deployments
+  kubernetes.core.k8s:
+    state: present
+    kubeconfig: "{{ kubeconfig_path }}"
+    template: "{{ playbook_dir }}/templates/nf-deployment.yaml.j2"
+  vars:
+    nf: "{{ item }}"
+  loop: "{{ network_functions }}"
+  when: item.name != 'mongodb'
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Deploy Network Function Services
+  kubernetes.core.k8s:
+    state: present
+    kubeconfig: "{{ kubeconfig_path }}"
+    template: "{{ playbook_dir }}/templates/nf-service.yaml.j2"
+  vars:
+    nf: "{{ item }}"
+  loop: "{{ network_functions }}"
+  when: item.name != 'mongodb'
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true

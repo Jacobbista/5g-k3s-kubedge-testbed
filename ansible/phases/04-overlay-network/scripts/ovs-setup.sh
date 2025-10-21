@@ -10,6 +10,7 @@ echo "🔧 Environment:"
 echo "  NODE_NAME=${NODE_NAME:-}"
 echo "  WORKER_IP=${WORKER_IP:-}"
 echo "  EDGE_IP=${EDGE_IP:-}"
+echo "  CELL_COUNT=${CELL_COUNT:-0}"
 
 BRIDGES=(br-n1 br-n2 br-n3 br-n4 br-n6e br-n6c)
 
@@ -58,7 +59,8 @@ if [[ -z "${LOCAL_TUN_IP:-}" ]]; then
 fi
 echo "🔧 LOCAL_TUN_IP=$LOCAL_TUN_IP  PEER=$PEER"
 
-# Create VXLAN ports according to interface mapping
+# Create VXLAN ports for global interfaces
+echo "🌐 Creating global network bridges..."
 if [[ "$NODE_NAME" == "edge" ]]; then
   create_vx br-n1 vxlan-n1 101 "$PEER" "$LOCAL_TUN_IP"
   create_vx br-n2 vxlan-n2 102 "$PEER" "$LOCAL_TUN_IP"
@@ -71,6 +73,23 @@ else
   create_vx br-n3 vxlan-n3 103 "$PEER" "$LOCAL_TUN_IP"
   create_vx br-n4 vxlan-n4 104 "$PEER" "$LOCAL_TUN_IP"
   create_vx br-n6c vxlan-n6 106 "$PEER" "$LOCAL_TUN_IP"
+fi
+
+# Create per-cell bridges (for N2 and N3 per cell)
+if [[ "${CELL_COUNT:-0}" -gt 0 ]]; then
+  echo "📱 Creating per-cell network bridges (cells: 1-${CELL_COUNT})..."
+  for cell_id in $(seq 1 "$CELL_COUNT"); do
+    # N2-cell-{id}: VNI 102{id} (e.g., cell-1 → VNI 1021)
+    vni_n2="102${cell_id}"
+    create_vx "br-n2-cell-${cell_id}" "vxlan-n2-cell-${cell_id}" "$vni_n2" "$PEER" "$LOCAL_TUN_IP"
+    
+    # N3-cell-{id}: VNI 103{id} (e.g., cell-1 → VNI 1031)
+    vni_n3="103${cell_id}"
+    create_vx "br-n3-cell-${cell_id}" "vxlan-n3-cell-${cell_id}" "$vni_n3" "$PEER" "$LOCAL_TUN_IP"
+  done
+  echo "✅ Created ${CELL_COUNT} cells (N2 + N3 per cell)"
+else
+  echo "ℹ️  No per-cell bridges (CELL_COUNT=${CELL_COUNT:-0})"
 fi
 
 echo "🔎 OVS interfaces (name/type/ofport):"

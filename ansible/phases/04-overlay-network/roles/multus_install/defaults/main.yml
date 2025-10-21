@@ -1,0 +1,80 @@
+multus_version: "4.1.0"
+alpine_image: "alpine:3.20"
+
+# CNI paths - worker (k3s) vs edge (standard containerd)
+cni_bin_dir_worker: "/var/lib/rancher/k3s/data/cni/bin" # k3s CNI binary path
+cni_bin_dir_edge: "/opt/cni/bin" # Standard CNI binary path
+cni_conf_dir_worker: "/var/lib/rancher/k3s/agent/etc/cni/net.d" # k3s path
+cni_conf_dir_edge: "/etc/cni/net.d" # Standard containerd path
+
+# Whereabouts
+whereabouts_crds:
+  - "https://raw.githubusercontent.com/k8snetworkplumbingwg/whereabouts/master/doc/crds/whereabouts.cni.cncf.io_ippools.yaml"
+  - "https://raw.githubusercontent.com/k8snetworkplumbingwg/whereabouts/master/doc/crds/whereabouts.cni.cncf.io_overlappingrangeipreservations.yaml"
+whereabouts_conf_relpath: "whereabouts.d/whereabouts.conf"
+whereabouts_kubeconfig_relpath: "whereabouts.d/whereabouts.kubeconfig"
+
+# OVS usage (keep true for your current design)
+use_ovs_cni: true
+
+# Overlay networks (N1/N2/N3/N4/N6e/N6c)
+overlay_mtu: 1450
+overlay_networks:
+  - {
+      name: "n1-net",
+      ns: "5g",
+      bridge: "br-n1",
+      cidr: "10.201.0.0/24",
+      start: "10.201.0.100",
+      end: "10.201.0.250",
+      gw: "10.201.0.1",
+    }
+  - {
+      name: "n2-net",
+      ns: "5g",
+      bridge: "br-n2",
+      cidr: "10.202.0.0/24",
+      start: "10.202.0.100",
+      end: "10.202.0.250",
+      gw: "10.202.0.1",
+    }
+  - {
+      name: "n3-net",
+      ns: "5g",
+      bridge: "br-n3",
+      cidr: "10.203.0.0/24",
+      start: "10.203.0.100",
+      end: "10.203.0.250",
+      gw: "10.203.0.1",
+    }
+  - {
+      name: "n4-net",
+      ns: "5g",
+      bridge: "br-n4",
+      cidr: "10.204.0.0/24",
+      start: "10.204.0.100",
+      end: "10.204.0.250",
+      gw: "10.204.0.1",
+      ipam: "static",
+    }
+  - {
+      name: "n6e-net",
+      ns: "mec",
+      bridge: "br-n6e",
+      cidr: "10.206.0.0/24",
+      start: "10.206.0.100",
+      end: "10.206.0.250",
+      gw: "10.206.0.1",
+    }
+  - {
+      name: "n6c-net",
+      ns: "5g",
+      bridge: "br-n6c",
+      cidr: "10.207.0.0/24",
+      start: "10.207.0.100",
+      end: "10.207.0.250",
+      gw: "10.207.0.1",
+    }
+
+# Expected Multus DS readiness (workers + edge)
+expected_multus_ready: 2

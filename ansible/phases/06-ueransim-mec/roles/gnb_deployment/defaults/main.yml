@@ -1,0 +1,45 @@
+---
+# gNB deployment defaults
+kubeconfig_path: "/home/vagrant/kubeconfig"
+namespace: "5g"
+ueransim_image: "jacobbista/comnetsemu-ueransim:latest"
+
+# gNB deployment configuration
+gnb_name: "gnb"
+gnb_replicas: 1
+gnb_node: "worker"
+gnb_privileged: true
+gnb_startup_delay: 20
+
+# gNB ports
+gnb_ports:
+  - { port: 2152, name: gtpu, protocol: UDP }
+  - { port: 38412, name: ngap, protocol: SCTP }
+
+# gNB network attachments (Multus)
+gnb_networks:
+  - { name: "n2-net", interface: "n2" }
+  - { name: "n3-net", interface: "n3" }
+
+# gNB UERANSIM configuration
+gnb_config:
+  mcc: "001"
+  mnc: "01"
+  nci: "0x000000010"
+  idLength: 32
+  tac: 1
+  linkIp: "0.0.0.0"
+  ngapIp: "0.0.0.0"
+  gtpIp: "0.0.0.0"
+  gtpPort: 2152
+  ngapPort: 38412
+  amf_address: "{{ hostvars[groups['masters'][0]].amf_n2_ip | default('10.202.0.100') }}"
+  amf_port: 38412
+  slices:
+    - { sst: 1, sd: 1 }
+    - { sst: 2, sd: 1 }
+  ignoreStreamIds: true
+
+# Paths inside container
+gnb_config_path: "/UERANSIM/config/gnb.yaml"
+gnb_binary_path: "/UERANSIM/build/nr-gnb"

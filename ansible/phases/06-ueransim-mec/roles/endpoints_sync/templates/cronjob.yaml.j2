@@ -1,0 +1,31 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: gnb-endpoints-sync
+  namespace: {{ namespace }}
+spec:
+  schedule: "{{ sync_schedule }}"
+  concurrencyPolicy: Forbid
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          serviceAccountName: {{ service_account_name }}
+          restartPolicy: OnFailure
+          containers:
+            - name: sync
+              image: python:3.11-alpine
+              command: ["/bin/sh", "-c"]
+              args:
+                - |
+                  pip install --no-cache-dir kubernetes && \
+                  python /scripts/sync_endpoints.py
+              volumeMounts:
+                - name: scripts
+                  mountPath: /scripts
+          volumes:
+            - name: scripts
+              configMap:
+                name: endpoints-sync-scripts
+
+

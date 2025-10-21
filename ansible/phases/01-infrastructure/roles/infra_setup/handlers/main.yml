@@ -1,0 +1,12 @@
+---
+- name: restart chrony
+  ansible.builtin.systemd:
+    name: chrony
+    state: restarted
+    enabled: true
+
+- name: restart openvswitch
+  ansible.builtin.systemd:
+    name: openvswitch-switch
+    state: restarted
+    enabled: true

@@ -17,6 +17,7 @@ amf:
   ngap:
     server:
       - address: 0.0.0.0
+        port: 38412
   metrics:
     server:
       - address: 0.0.0.0

@@ -1,0 +1,94 @@
+---
+- name: Get Nodes
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Node
+    kubeconfig: "{{ kubeconfig_path }}"
+  register: nodes
+  retries: 24
+  delay: 5
+  until: (nodes.resources | length) >= 1
+
+- name: Count Ready nodes (master + worker, edge joins later via KubeEdge)
+  set_fact:
+    ready_nodes: "{{ nodes.resources | selectattr('status', 'defined') | list | length }}"
+
+# --- Flannel DS (k3s may not deploy it as a DaemonSet, or it might be embedded) ---
+- name: Get all DaemonSets in kube-system
+  kubernetes.core.k8s_info:
+    api_version: apps/v1
+    kind: DaemonSet
+    namespace: "{{ namespace_system }}"
+    kubeconfig: "{{ kubeconfig_path }}"
+  register: all_ds
+  failed_when: false
+
+- name: Filter for Flannel-related DaemonSets
+  set_fact:
+    flannel_ds: >-
+      {{
+        all_ds.resources | default([])
+        | selectattr('metadata.name', 'search', 'flannel')
+        | list
+      }}
+
+- name: Check if Flannel DS exists
+  set_fact:
+    flannel_exists: "{{ (flannel_ds | length) > 0 }}"
+
+- name: Assert Flannel DS is fully Ready (if it exists)
+  when: flannel_exists | bool
+  vars:
+    ds: "{{ flannel_ds[0] }}"
+  assert:
+    that:
+      - (ds.status.numberReady | int) == (ds.status.desiredNumberScheduled | int)
+    fail_msg: "Flannel not fully ready: Ready={{ ds.status.numberReady | default('0') }} / Desired={{ ds.status.desiredNumberScheduled | default('0') }}"
+
+# --- kube-proxy DS (optional: only if present) ---
+- name: Get DS kube-proxy (optional)
+  kubernetes.core.k8s_info:
+    api_version: apps/v1
+    kind: DaemonSet
+    name: kube-proxy
+    namespace: "{{ namespace_system }}"
+    kubeconfig: "{{ kubeconfig_path }}"
+  register: ds_kp
+  failed_when: false
+
+- name: Assert kube-proxy DS is fully Ready (only if it exists)
+  when: (ds_kp.resources | length) == 1
+  vars:
+    ds: "{{ ds_kp.resources[0] }}"
+  assert:
+    that:
+      - (ds.status.numberReady | int) == (ds.status.desiredNumberScheduled | int)
+    fail_msg: "kube-proxy not fully ready: Ready={{ ds.status.numberReady | default('0') }} / Desired={{ ds.status.desiredNumberScheduled | default('0') }}"
+
+# --- CoreDNS Deployment ---
+- name: Get CoreDNS Deployment
+  kubernetes.core.k8s_info:
+    api_version: apps/v1
+    kind: Deployment
+    name: coredns
+    namespace: "{{ namespace_system }}"
+    kubeconfig: "{{ kubeconfig_path }}"
+  register: dep_coredns
+
+- name: Assert CoreDNS available replicas
+  vars:
+    d: "{{ dep_coredns.resources[0] }}"
+  assert:
+    that:
+      - dep_coredns.resources | length == 1
+      - (d.status.availableReplicas | default(0) | int) >= (expected_min_coredns | int)
+    fail_msg: "CoreDNS not ready: available={{ d.status.availableReplicas | default(0) }} (min {{ expected_min_coredns }})"
+
+# --- Summary ---
+- name: Summary
+  debug:
+    msg:
+      - "Nodes Ready: {{ ready_nodes }} / {{ nodes.resources | length }}"
+      - "Flannel DS: {{ flannel_exists | ternary( (flannel_ds[0].status.numberReady | default('0') ~ ' / ' ~ flannel_ds[0].status.desiredNumberScheduled | default('0')), 'not found (embedded in k3s)') }}"
+      - "kube-proxy DS: {{ (ds_kp.resources | length) | ternary( (ds_kp.resources[0].status.numberReady | default('0') ~ ' / ' ~ ds_kp.resources[0].status.desiredNumberScheduled | default('0')), 'absent') }}"
+      - "CoreDNS: available={{ dep_coredns.resources[0].status.availableReplicas | default(0) }}"

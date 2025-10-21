@@ -1,0 +1,73 @@
+#!/usr/bin/env python3
+"""
+gNB Endpoints Sync Script
+
+This script populates Kubernetes Endpoints with gNB Multus N2 IPs.
+It enables DNS-based service discovery for gNBs using their secondary network interfaces.
+
+See roles/endpoints_sync/README.md for architecture details.
+"""
+from kubernetes import client, config
+import json
+
+NAMESPACE = "{{ namespace }}"
+
+def get_multus_n2_ip(pod):
+    ann = pod.metadata.annotations or {}
+    ns = ann.get("k8s.v1.cni.cncf.io/network-status")
+    if not ns:
+        return None
+    try:
+        parsed = json.loads(ns)
+        for net in parsed:
+            if net.get("interface") == "n2" and net.get("ips"):
+                # return first IP without mask
+                return str(net["ips"][0]).split("/")[0]
+    except Exception:
+        return None
+    return None
+
+def main():
+    config.load_incluster_config()
+    v1 = client.CoreV1Api()
+
+    pods = v1.list_namespaced_pod(NAMESPACE, label_selector="component=gnb")
+    for pod in pods.items:
+        if pod.status.phase != "Running":
+            continue
+        n2_ip = get_multus_n2_ip(pod)
+        if not n2_ip:
+            print(f"[WARN] no N2 IP for {pod.metadata.name}")
+            continue
+
+        # Use 'app' label for Service name (works for both Deployment and StatefulSet)
+        base = pod.metadata.labels.get("app")
+        if not base:
+            print(f"[WARN] no 'app' label for {pod.metadata.name}")
+            continue
+
+        ep = client.V1Endpoints(
+            metadata=client.V1ObjectMeta(name=base),
+            subsets=[client.V1EndpointSubset(
+                addresses=[client.V1EndpointAddress(ip=n2_ip)],
+                ports=[
+                    client.CoreV1EndpointPort(port=38412, protocol="SCTP", name="ngap"),
+                    client.CoreV1EndpointPort(port=2152, protocol="UDP", name="gtpu"),
+                ],
+            )]
+        )
+
+        try:
+            v1.patch_namespaced_endpoints(base, NAMESPACE, ep)
+            print(f"[INFO] patched endpoints {base} → {n2_ip}")
+        except client.exceptions.ApiException as e:
+            if e.status == 404:
+                v1.create_namespaced_endpoints(NAMESPACE, ep)
+                print(f"[INFO] created endpoints {base} → {n2_ip}")
+            else:
+                raise
+
+if __name__ == "__main__":
+    main()
+
+

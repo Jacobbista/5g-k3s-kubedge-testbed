@@ -1,0 +1,102 @@
+{% for cell in ueransim_topology.cells %}
+---
+# Service for {{ cell.gnb.name }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ cell.gnb.name }}
+  namespace: {{ namespace }}
+  labels:
+    app: {{ cell.gnb.name }}
+    cell-id: "{{ cell.id }}"
+spec:
+  selector:
+    app: {{ cell.gnb.name }}
+  ports:
+    - name: ngap
+      port: 38412
+      protocol: SCTP
+    - name: gtpu
+      port: 2152
+      protocol: UDP
+
+---
+# Deployment for {{ cell.gnb.name }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ cell.gnb.name }}
+  namespace: {{ namespace }}
+  labels:
+    app: {{ cell.gnb.name }}
+    cell-id: "{{ cell.id }}"
+    component: gnb
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: {{ cell.gnb.name }}
+  template:
+    metadata:
+      labels:
+        app: {{ cell.gnb.name }}
+        cell-id: "{{ cell.id }}"
+        component: gnb
+      annotations:
+        k8s.v1.cni.cncf.io/networks: |
+          [
+            {"name": "n2-cell-{{ cell.id }}", "interface": "n2"},
+            {"name": "n3-cell-{{ cell.id }}", "interface": "n3"}
+          ]
+    spec:
+      nodeSelector:
+        kubernetes.io/hostname: {{ cell.gnb.node | default(ueransim_topology.defaults.node_defaults.gnb) }}
+      containers:
+        - name: gnb
+          image: {{ ueransim_topology.defaults.image }}
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            privileged: true
+            capabilities:
+              add: ["NET_ADMIN", "SYS_ADMIN"]
+          command: ["{{ gnb_binary_path }}"]
+          args: ["-c", "{{ gnb_config_path }}"]
+          ports:
+            - containerPort: 38412
+              name: ngap
+              protocol: SCTP
+            - containerPort: 2152
+              name: gtpu
+              protocol: UDP
+          volumeMounts:
+            - name: config
+              mountPath: /UERANSIM/config
+              readOnly: true
+          readinessProbe:
+            tcpSocket:
+              port: 38412
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            timeoutSeconds: 3
+            successThreshold: 1
+            failureThreshold: 3
+          livenessProbe:
+            exec:
+              command: ["pgrep", "-f", "nr-gnb"]
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: "500m"
+              memory: "512Mi"
+            limits:
+              cpu: "1000m"
+              memory: "1Gi"
+      volumes:
+        - name: config
+          configMap:
+            name: {{ cell.gnb.name }}-config
+{% endfor %}
+

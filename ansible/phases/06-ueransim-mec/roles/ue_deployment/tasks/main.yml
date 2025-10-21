@@ -1,0 +1,34 @@
+---
+# UE DEPLOYMENT (StatefulSet per cell)
+# Deploy UEs driven by ueransim_topology
+
+- name: Load topology vars
+  include_vars:
+    file: "{{ playbook_dir }}/vars/topology.yml"
+
+- name: Deploy UE StatefulSets per cell
+  kubernetes.core.k8s:
+    state: present
+    kubeconfig: "{{ kubeconfig_path }}"
+    definition: "{{ lookup('template', 'ue-statefulset.yaml.j2') }}"
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Wait for UE pods running (per cell)
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Pod
+    namespace: "{{ namespace }}"
+    label_selectors: ["app=ue", "cell-id={{ item.id }}"]
+    kubeconfig: "{{ kubeconfig_path }}"
+  register: ue_pods
+  retries: 30
+  delay: 10
+  until: >-
+    (ue_pods.resources | length) >= (item.ues | length)
+    and (ue_pods.resources | selectattr('status.phase','equalto','Running') | list | length) >= (item.ues | length)
+  loop: "{{ ueransim_topology.cells }}"
+  loop_control:
+    label: "cell-{{ item.id }}"
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true

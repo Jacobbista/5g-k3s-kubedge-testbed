@@ -1,0 +1,5 @@
+---
+# Connectivity validation defaults
+kubeconfig_path: "/home/vagrant/kubeconfig"
+namespace: "5g"
+validation_timeout: 120

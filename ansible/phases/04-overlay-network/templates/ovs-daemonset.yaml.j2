@@ -48,6 +48,8 @@ spec:
           value: "{{ hostvars[groups['workers'][0]]['ansible_host'] }}"
         - name: EDGE_IP
           value: "{{ hostvars[groups['edges'][0]]['ansible_host'] }}"
+        - name: CELL_COUNT
+          value: "{{ cell_count | default('0') }}"
         command: ["sh","-c"]
         args:
           - |

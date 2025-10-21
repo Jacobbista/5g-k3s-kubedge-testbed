@@ -1,12 +1,15 @@
 ---
-# FASE 5: 5G CORE NETWORK FUNCTIONS
-# Deploy 5G Core NFs solo dopo che la rete overlay è pronta
+# PHASE 5: 5G CORE NETWORK FUNCTIONS
+# Deploy Open5GS-based 5G Core after overlay network is ready
 
-- name: "FASE 5: Create Namespaces"
+- name: "PHASE 5 | Create Namespaces"
   hosts: masters
-  become: yes
+  become: no
+  tags:
+    - phase5
+    - namespaces
   tasks:
-    - name: "5G Core | Ensure 5g namespace exists"
+    - name: Ensure 5g namespace exists
       kubernetes.core.k8s:
         api_version: v1
         kind: Namespace
@@ -20,7 +23,7 @@
         kubeconfig: "/home/vagrant/kubeconfig"
       run_once: true
 
-    - name: "5G Core | Ensure mec namespace exists"
+    - name: Ensure mec namespace exists
       kubernetes.core.k8s:
         api_version: v1
         kind: Namespace
@@ -34,56 +37,52 @@
         kubeconfig: "/home/vagrant/kubeconfig"
       run_once: true
 
-- name: "FASE 5: Setup ConfigMaps"
-  hosts: masters
+- name: "PHASE 5 | Infrastructure Setup"
+  hosts: masters,workers,edges
   become: yes
+  tags:
+    - phase5
+    - infrastructure_setup
+    - infra
   roles:
-    - { role: roles/configmaps_setup, tags: ['configmaps', '5g', 'mec'] }
+    - roles/infrastructure_setup
+    - roles/runtime_watchdog
 
-- name: "FASE 5: Deploy 5G Core Network Functions"
-  hosts: masters
-  become: yes
-  roles:
-    - { role: roles/5g_core_manifests, tags: ['5g', 'core', 'deployment'] }
-
-- name: "FASE 5: Import Subscribers (Open5GS)"
+- name: "PHASE 5 | ConfigMaps Setup"
   hosts: masters
   become: yes
   tags:
-    - subscribers
-    - 5g
+    - phase5
+    - configmaps_setup
+    - configmaps
   roles:
-    - { role: roles/subscriber_import }
+    - roles/configmaps_setup
 
-- name: "FASE 5: Verify 5G Core Deployment"
+- name: "PHASE 5 | Deploy Network Functions"
   hosts: masters
-  become: yes
-  tasks:
-    - name: "5G Core | Get 5G namespace pods"
-      kubernetes.core.k8s_info:
-        api_version: v1
-        kind: Pod
-        namespace: 5g
-        kubeconfig: "/home/vagrant/kubeconfig"
-      register: pods_5g_info
+  become: no
+  tags:
+    - phase5
+    - nf_deployments
+    - nfs
+  roles:
+    - roles/nf_deployments
 
-    - name: "5G Core | Get 5G services"
-      kubernetes.core.k8s_info:
-        api_version: v1
-        kind: Service
-        namespace: 5g
-        kubeconfig: "/home/vagrant/kubeconfig"
-      register: services_5g_info
+- name: "PHASE 5 | Import Subscribers"
+  hosts: masters
+  become: no
+  tags:
+    - phase5
+    - subscriber_import
+    - subscribers
+  roles:
+    - roles/subscriber_import
 
-    - name: "5G Core | Display 5G Core deployment status"
-      debug:
-        msg: |
-          ✅ 5G Core Network Functions Deployed
-          📦 Pods: {{ pods_5g_info.resources | length }}
-          {% for pod in pods_5g_info.resources %}
-          - {{ pod.metadata.name }}: {{ pod.status.phase }} ({{ pod.spec.nodeName }})
-          {% endfor %}
-          🌐 Services: {{ services_5g_info.resources | length }}
-          {% for svc in services_5g_info.resources %}
-          - {{ svc.metadata.name }}: {{ svc.spec.type }} ({{ svc.spec.clusterIP }}:{{ svc.spec.ports[0].port }})
-          {% endfor %}
+- name: "PHASE 5 | Validate Deployment"
+  hosts: masters
+  become: no
+  tags:
+    - phase5
+    - validation
+  roles:
+    - roles/validation

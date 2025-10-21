@@ -1,47 +1,57 @@
----
-# FASE 3: KUBEEDGE SETUP
-# Setup KubeEdge cloudcore sul worker e edgecore sull'edge
+# PHASE 3: KubeEdge Setup
 
-- name: "FASE 3: Setup KubeEdge CloudCore on Worker"
+- name: "PHASE 3 | CloudCore on worker"
   hosts: workers
   become: yes
   roles:
-    - { role: roles/kubeedge_worker, tags: ['kubeedge', 'cloudcore', 'worker'] }
+    - roles/kubeedge_common
+    - roles/kubeedge_cloudcore
 
-- name: "FASE 3: Setup KubeEdge EdgeCore on Edge"
+- name: "PHASE 3 | EdgeCore on edge"
   hosts: edges
   become: yes
   roles:
-    - { role: roles/kubeedge_edge, tags: ['kubeedge', 'edgecore', 'edge'] }
+    - roles/edge_containerd
+    - roles/kubeedge_common
+    - roles/kubeedge_edgecore
 
-- name: "FASE 3: Verify KubeEdge Integration"
+- name: "PHASE 3 | Verify"
   hosts: masters
   become: yes
-  tags:
-    - verify
   tasks:
-    - name: "KubeEdge | Verify edge node is registered"
-      kubernetes.core.k8s_info:
-        api_version: v1
-        kind: Node
-        name: "{{ hostvars[groups['edges'][0]]['inventory_hostname'] }}"
+    - name: Ensure kubeedge namespace exists
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Namespace
+          metadata: { name: kubeedge }
         kubeconfig: "/home/vagrant/kubeconfig"
-      register: edge_node_info
 
-    - name: "KubeEdge | Verify KubeEdge namespace pods"
+    - name: Get CloudCore pod(s)
       kubernetes.core.k8s_info:
         api_version: v1
         kind: Pod
         namespace: kubeedge
         kubeconfig: "/home/vagrant/kubeconfig"
-      register: kubeedge_pods_info
+      register: ke_pods
 
-    - name: "KubeEdge | Display KubeEdge integration status"
+    - name: Assert CloudCore Running
+      assert:
+        that:
+          - (ke_pods.resources | selectattr('status.phase','equalto','Running') | list | length) >= 1
+        fail_msg: "CloudCore not running"
+
+    - name: Check Edge node object
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Node
+        name: "{{ groups['edges'][0] }}"
+        kubeconfig: "/home/vagrant/kubeconfig"
+      register: edge_node
+
+    - name: Show KubeEdge status
       debug:
-        msg: |
-          ✅ KubeEdge Integration Complete
-          📊 Edge Node: {{ edge_node_info.resources[0].metadata.name }} ({{ edge_node_info.resources[0].status.conditions | selectattr('type', 'equalto', 'Ready') | map(attribute='status') | first }})
-          📦 KubeEdge Pods: {{ kubeedge_pods_info.resources | length }}
-          {% for pod in kubeedge_pods_info.resources %}
-          - {{ pod.metadata.name }}: {{ pod.status.phase }}
-          {% endfor %}
+        msg:
+          - "Edge node: {{ edge_node.resources | length | ternary(edge_node.resources[0].metadata.name, 'not found') }}"
+          - "CloudCore pods (kubeedge): {{ ke_pods.resources | map(attribute='metadata.name') | list }}"

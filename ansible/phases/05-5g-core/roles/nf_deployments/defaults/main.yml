@@ -1,0 +1,137 @@
+---
+# Network Functions deployment defaults
+kubeconfig_path: "/home/vagrant/kubeconfig"
+namespace_5g: "5g"
+
+# Container images
+mongodb_image: "jacobbista/comnetsemu-5gc:latest"
+nf_image: "jacobbista/comnetsemu-5gc:latest"
+
+# Network Functions definitions
+network_functions:
+  # MongoDB (Database)
+  - name: mongodb
+    replicas: 1
+    node: worker
+    ports:
+      - { port: 3000, name: webui }
+      - { port: 27017, name: mongodb }
+    db_required: false
+
+  # NRF (Network Repository Function)
+  - name: nrf
+    replicas: 1
+    node: worker
+    ports:
+      - { port: 7777, name: sbi }
+      - { port: 9090, name: metrics }
+
+  # AMF (Access and Mobility Management Function)
+  - name: amf
+    replicas: 1
+    node: worker
+    privileged: true
+    ports:
+      - { port: 7777, name: sbi }
+      - { port: 38412, name: ngap, protocol: SCTP }
+      - { port: 9090, name: metrics }
+    networks:
+      - { name: "n1-net", interface: "n1", ips: ["{{ amf_n1_ip }}/24"] }
+      - { name: "n2-net", interface: "n2", ips: ["{{ amf_n2_ip }}/24"] }
+    # Per-cell N2 interfaces will be added dynamically via amf_cell_networks
+    extra_env:
+      - { name: "STATIC_IP", value: "{{ amf_n2_ip }}" }
+    enable_rp_filter_fix: true # Enable initContainer for multi-homed routing
+
+  # SMF (Session Management Function)
+  - name: smf
+    replicas: 1
+    node: worker
+    privileged: true
+    ports:
+      - { port: 7777, name: sbi }
+      - { port: 8805, name: pfcp, protocol: UDP }
+      - { port: 9090, name: metrics }
+    networks:
+      - { name: "n4-net", interface: "n4", ips: ["{{ smf_n4_ip }}/24"] }
+
+  # UPF Edge (User Plane Function - Edge)
+  # DISABLED: CNI route conflict on edge node - see docs/known-issues/upf-edge-cni-route-conflict.md
+  - name: upf-edge
+    replicas: 0
+    node: edge
+    privileged: true
+    ports:
+      - { port: 2152, name: gtpu, protocol: UDP }
+      - { port: 8805, name: pfcp, protocol: UDP }
+      - { port: 9090, name: metrics }
+    networks:
+      - { name: "n3-net", interface: "n3", ips: ["{{ upf_edge_n3_ip }}/24"] }
+      - { name: "n4-net", interface: "n4", ips: ["{{ upf_edge_n4_ip }}/24"] }
+      - { name: "n6e-net", namespace: "mec", interface: "n6" }
+    extra_env:
+      - { name: "UPF_CONFIG", value: "/etc/open5gs/upf_edge.yaml" }
+
+  # UPF Cloud (User Plane Function - Cloud)
+  - name: upf-cloud
+    replicas: 1
+    node: worker
+    privileged: true
+    ports:
+      - { port: 2152, name: gtpu, protocol: UDP }
+      - { port: 8805, name: pfcp, protocol: UDP }
+      - { port: 9090, name: metrics }
+    networks:
+      - { name: "n3-net", interface: "n3", ips: ["{{ upf_cloud_n3_ip }}/24"] }
+      - { name: "n4-net", interface: "n4", ips: ["{{ upf_cloud_n4_ip }}/24"] }
+      - { name: "n6c-net", interface: "n6" }
+    extra_env:
+      - { name: "UPF_CONFIG", value: "/etc/open5gs/upf_cloud.yaml" }
+
+  # UDM (Unified Data Management)
+  - name: udm
+    replicas: 1
+    node: worker
+    ports:
+      - { port: 7777, name: sbi }
+      - { port: 9090, name: metrics }
+
+  # UDR (Unified Data Repository)
+  - name: udr
+    replicas: 1
+    node: worker
+    ports:
+      - { port: 7777, name: sbi }
+      - { port: 9090, name: metrics }
+
+  # PCF (Policy Control Function)
+  - name: pcf
+    replicas: 1
+    node: worker
+    ports:
+      - { port: 7777, name: sbi }
+      - { port: 9090, name: metrics }
+
+  # BSF (Binding Support Function)
+  - name: bsf
+    replicas: 1
+    node: worker
+    ports:
+      - { port: 7777, name: sbi }
+      - { port: 9090, name: metrics }
+
+  # NSSF (Network Slice Selection Function)
+  - name: nssf
+    replicas: 1
+    node: worker
+    ports:
+      - { port: 7777, name: sbi }
+      - { port: 9090, name: metrics }
+
+  # AUSF (Authentication Server Function)
+  - name: ausf
+    replicas: 1
+    node: worker
+    ports:
+      - { port: 7777, name: sbi }
+      - { port: 9090, name: metrics }

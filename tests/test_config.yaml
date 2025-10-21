@@ -1,0 +1,177 @@
+# 5G K3s KubeEdge Testbed - Test Configuration
+# Based on ansible/group_vars/all.yml and inventory.ini
+
+# Global test configuration
+global:
+  verbose: false
+  timeout: 300
+  retry_attempts: 3
+  log_level: "INFO"
+  cleanup: true
+
+# Test suite configurations
+suites:
+  e2e:
+    enabled: true
+    timeout: 1800
+    phases: [infrastructure, 5g-core, ueransim, e2e]
+  
+  protocols:
+    enabled: true
+    timeout: 600
+  
+  performance:
+    enabled: true
+    timeout: 1200
+    duration: 60
+    parallel_connections: 10
+    packet_size: 1472
+  
+  resilience:
+    enabled: true
+    timeout: 1800
+    recovery_timeout: 120
+    test_iterations: 3
+
+# Cluster configuration
+cluster:
+  kubeconfig_path: "/home/vagrant/kubeconfig"
+  master_host: "192.168.56.10"
+  worker_host: "192.168.56.11"
+  edge_host: "192.168.56.12"
+
+# Network configuration (from ansible/group_vars/all.yml)
+network:
+  namespaces:
+    fiveg: "5g"
+    mec: "mec"
+    kube_system: "kube-system"
+    kubeedge: "kubeedge"
+
+  # 5G Network Interfaces
+  interfaces:
+    n1:
+      amf_ip: "10.201.0.100"
+      subnet: "10.201.0.0/24"
+      nad_name: "n1-net"
+      nad_namespace: "5g"
+      protocol: "SCTP"
+      port: 38412
+    
+    n2:
+      amf_ip: "10.202.0.100"
+      subnet: "10.202.0.0/24"
+      nad_name: "n2-net"
+      nad_namespace: "5g"
+      protocol: "SCTP"
+      port: 38412
+    
+    n3:
+      upf_edge_ip: "10.203.0.100"
+      upf_cloud_ip: "10.203.0.101"
+      subnet: "10.203.0.0/24"
+      nad_name: "n3-net"
+      nad_namespace: "5g"
+      protocol: "GTP-U"
+      port: 2152
+    
+    n4:
+      smf_ip: "10.204.0.100"
+      upf_edge_ip: "10.204.0.101"
+      upf_cloud_ip: "10.204.0.102"
+      subnet: "10.204.0.0/24"
+      nad_name: "n4-net"
+      nad_namespace: "5g"
+      protocol: "PFCP"
+      port: 8805
+    
+    n6e:
+      subnet: "10.206.0.0/24"
+      nad_name: "n6-mec-net"
+      nad_namespace: "mec"
+    
+    n6c:
+      subnet: "10.207.0.0/24"
+      nad_name: "n6-cld-net"
+      nad_namespace: "5g"
+
+  # VXLAN configuration
+  vxlan:
+    keys:
+      n1: 1
+      n2: 2
+      n3: 3
+      n4: 4
+      n6e: 6
+      n6c: 7
+    mtu: 1450
+
+# 5G Core components
+core_components:
+  amf:
+    name: "amf"
+    namespace: "5g"
+    ports: [38412]  # SCTP for N1/N2
+    interfaces: ["n1", "n2"]
+  
+  smf:
+    name: "smf"
+    namespace: "5g"
+    ports: [8805]   # PFCP for N4
+    interfaces: ["n4"]
+  
+  upf_edge:
+    name: "upf-edge"
+    namespace: "5g"
+    ports: [2152, 8805]  # GTP-U for N3, PFCP for N4
+    interfaces: ["n3", "n4"]
+  
+  upf_cloud:
+    name: "upf-cloud"
+    namespace: "5g"
+    ports: [2152, 8805]  # GTP-U for N3, PFCP for N4
+    interfaces: ["n3", "n4"]
+
+# UERANSIM components
+ueransim:
+  gnb:
+    name: "gnb"
+    namespace: "5g"
+    interfaces: ["n2", "n3"]
+  
+  ue:
+    name: "ue"
+    namespace: "5g"
+    interfaces: ["n1", "n3"]
+
+# Performance thresholds
+performance:
+  throughput:
+    min_mbps: 10
+    target_mbps: 100
+  latency:
+    max_ms: 50
+    target_ms: 10
+  packet_loss:
+    max_percent: 1
+    target_percent: 0.1
+
+# Test specific configurations
+test_configs:
+  connectivity:
+    ping_count: 3
+    ping_timeout: 5
+  
+  protocols:
+    connection_timeout: 10
+    message_timeout: 30
+  
+  performance:
+    iperf_duration: 60
+    iperf_parallel: 10
+    iperf_packet_size: 1472
+  
+  resilience:
+    restart_timeout: 120
+    recovery_timeout: 180
+    test_iterations: 3

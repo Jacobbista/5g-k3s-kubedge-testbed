@@ -1,0 +1,62 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mongodb
+  namespace: {{ namespace_5g }}
+  annotations:
+    checksum/config: "{{ lookup('file', playbook_dir + '/configs/mongodb.conf') | hash('sha256') }}"
+    checksum/scripts: "{{ lookup('file', playbook_dir + '/scripts/mongo_webui_init.sh') | hash('sha256') }}"
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mongodb
+  template:
+    metadata:
+      labels:
+        app: mongodb
+    spec:
+      nodeSelector:
+        kubernetes.io/hostname: worker
+      containers:
+      - name: mongodb
+        image: {{ mongodb_image }}
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 3000
+          name: webui
+        - containerPort: 27017
+          name: mongodb
+        readinessProbe:
+          tcpSocket:
+            port: 27017
+          initialDelaySeconds: 5
+          periodSeconds: 5
+          failureThreshold: 30
+        command: ["bash", "/open5gs/install/scripts/mongo_webui_init.sh"]
+        env:
+        - name: COMPONENT_NAME
+          value: "mongo"
+        - name: HEALTH_CHECK_TYPE
+          value: "mongo"
+        volumeMounts:
+        - name: mongodb-data
+          mountPath: /var/lib/mongodb
+        - name: mongodb-config
+          mountPath: /open5gs/install/etc/open5gs
+        - name: nf-scripts
+          mountPath: /open5gs/install/scripts
+        - name: mongodb-logs
+          mountPath: /open5gs/install/var/log/open5gs
+      volumes:
+      - name: mongodb-config
+        configMap:
+          name: mongodb-config
+      - name: nf-scripts
+        configMap:
+          name: nf-scripts
+      - name: mongodb-logs
+        emptyDir: {}
+      - name: mongodb-data
+        emptyDir: {}
+

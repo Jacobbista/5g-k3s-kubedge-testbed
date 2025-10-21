@@ -1,0 +1,5 @@
+# ANSIBLE MANAGED - 5G Testbed Hosts
+127.0.0.1 localhost
+{% for h in groups['all'] if h != 'ansible' %}
+{{ hostvars[h]['ansible_host'] }} {{ h }}
+{% endfor %}

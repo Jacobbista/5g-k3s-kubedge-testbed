@@ -1,0 +1,41 @@
+#!/usr/bin/env python3
+import json, os, sys
+from typing import List, Dict
+from pymongo import MongoClient
+
+def load_subscribers(path: str) -> List[Dict]:
+    with open(path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    if isinstance(data, list):
+        return data
+    if isinstance(data, dict) and isinstance(data.get("subscribers"), list):
+        return data["subscribers"]
+    raise ValueError("subs.json must be a JSON array or an object with key 'subscribers' (array).")
+
+def main():
+    mongo_uri = os.environ.get("MONGO_URI", "mongodb://mongodb:27017/open5gs")
+    subs_file = os.environ.get("SUBS_FILE", "/work/subs.json")
+
+    subs = load_subscribers(subs_file)
+    client = MongoClient(mongo_uri)
+    col = client["open5gs"]["subscribers"]
+
+    upserts = 0
+    for s in subs:
+        imsi = str(s.get("imsi") or "")
+        if not imsi:
+            print("Skipping a subscriber without IMSI", file=sys.stderr)
+            continue
+        s = dict(s)
+        s["imsi"] = imsi  # ensure string key
+        col.update_one({"imsi": imsi}, {"$set": s}, upsert=True)
+        upserts += 1
+
+    print(f"Imported/Upserted subscribers: {upserts}")
+
+if __name__ == "__main__":
+    try:
+        main()
+    except Exception as e:
+        print(f"[ERROR] {e}", file=sys.stderr)
+        sys.exit(1)

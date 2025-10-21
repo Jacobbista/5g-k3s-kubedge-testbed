@@ -1,0 +1,45 @@
+---
+# UERANSIM Topology Configuration (Phase 6 scoped)
+# One cell == one gNB. gNB/UE run on edge by default (realistic RAN placement).
+
+ueransim_topology:
+  cells:
+    - id: 1 # Cell ID (unique, sequential)
+      gnb:
+        name: "gnb-1" # StatefulSet name
+        node: "edge" # place gNB on edge by default
+        nci: "0x000000010" # NR Cell Identity
+        tac: 1 # Tracking Area Code
+        slices:
+          - { sst: 1, sd: 1, dnn: "internet" }
+          # - { sst: 2, sd: 1, dnn: "mec" }  # enable when MEC path is used
+      ues: # List of UEs in this cell (each UE = one NR SIM card)
+        - {
+            id: 1, # UE ID (unique across all cells)
+            supi_suffix: "895", # Last 3 digits of IMSI (e.g., "895")
+            apn: "internet", # APN/DNN (e.g., "internet", "mec")
+            slice: { sst: 1, sd: 1 }, # Network slice
+            node: "edge", # Optional: pin to specific node
+          }
+        - {
+            id: 2,
+            supi_suffix: "896",
+            apn: "internet",
+            slice: { sst: 1, sd: 1 },
+            node: "edge",
+          }
+
+  defaults:
+    mcc: "001" # Mobile Country Code
+    mnc: "01" # Mobile Network Code
+    key_template: "8baf473f2f8fd09487cccbd7097c6862" # Base authentication key (K)
+    op: "11111111111111111111111111111111" # Operator key (OP/OPC)
+    amf_n2_ip: "{{ amf_n2_ip }}" # AMF in datacenter (worker)
+    image: "jacobbista/comnetsemu-ueransim:latest" # UERANSIM container image
+    node_defaults:
+      gnb: "edge" # place gNB on edge by default
+      ue: "edge" # place UE on edge by default
+
+# Computed helpers (used in templates)
+ueransim_cell_count: "{{ ueransim_topology.cells | length | int }}" # Number of cells
+ueransim_total_ues: "{{ ueransim_topology.cells | sum(attribute='ues', start=[]) | length | int }}" # Total number of UEs

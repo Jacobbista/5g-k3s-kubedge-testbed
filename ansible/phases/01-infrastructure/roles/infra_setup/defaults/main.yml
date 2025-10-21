@@ -1,0 +1,21 @@
+# Packages
+packages_common:
+  - chrony
+  - iptables
+  - netfilter-persistent
+  - iproute2
+  - net-tools
+  - curl
+  - wget
+  - jq
+  - conntrack
+
+# Services / features
+enable_node_nat: true
+uplink_iface: "{{ ansible_default_ipv4.interface | default('eth1') }}"
+configure_hosts_from_inventory: true
+validate_connectivity: true
+
+# OVS on data-plane nodes
+enable_ovs_on_workers_edges: true
+openvswitch_pkg: openvswitch-switch

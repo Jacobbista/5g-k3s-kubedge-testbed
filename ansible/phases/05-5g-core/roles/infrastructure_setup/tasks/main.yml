@@ -1,0 +1,80 @@
+---
+# INFRASTRUCTURE SETUP FOR 5G CORE
+# Prepares cluster infrastructure: storage, CRI config, image pre-pulling
+
+- name: Check if hostpath StorageClass already exists
+  kubernetes.core.k8s_info:
+    api_version: storage.k8s.io/v1
+    kind: StorageClass
+    name: "{{ storage_class_name }}"
+    kubeconfig: "{{ kubeconfig_path }}"
+  register: storage_class_check
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Create hostpath StorageClass (only if it doesn't exist)
+  kubernetes.core.k8s:
+    state: present
+    kubeconfig: "{{ kubeconfig_path }}"
+    definition:
+      apiVersion: storage.k8s.io/v1
+      kind: StorageClass
+      metadata:
+        name: "{{ storage_class_name }}"
+      provisioner: "{{ storage_provisioner }}"
+      volumeBindingMode: WaitForFirstConsumer
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+  when: storage_class_check.resources | length == 0
+
+- name: Configure crictl on worker (k3s containerd)
+  copy:
+    content: |
+      runtime-endpoint: {{ worker_cri_endpoint }}
+      image-endpoint: {{ worker_cri_endpoint }}
+      timeout: 10
+      debug: false
+    dest: /etc/crictl.yaml
+    mode: "0644"
+  delegate_to: "{{ groups['workers'][0] }}"
+  run_once: true
+
+- name: Configure crictl on edge (standalone containerd)
+  copy:
+    content: |
+      runtime-endpoint: {{ edge_cri_endpoint }}
+      image-endpoint: {{ edge_cri_endpoint }}
+      timeout: 10
+      debug: false
+    dest: /etc/crictl.yaml
+    mode: "0644"
+  delegate_to: "{{ groups['edges'][0] }}"
+  run_once: true
+
+- name: Pre-pull container images on worker
+  shell: |
+    set -e
+    {% for img in container_images %}
+    crictl pull "{{ img }}" || true
+    {% endfor %}
+    crictl pull python:3.11 || true
+    crictl pull mongo:6.0 || true
+  args:
+    executable: /bin/bash
+  delegate_to: "{{ groups['workers'][0] }}"
+  run_once: true
+  changed_when: false
+
+- name: Pre-pull container images on edge
+  shell: |
+    set -e
+    {% for img in container_images %}
+    crictl pull "{{ img }}" || true
+    {% endfor %}
+    crictl pull python:3.11 || true
+    crictl pull mongo:6.0 || true
+  args:
+    executable: /bin/bash
+  delegate_to: "{{ groups['edges'][0] }}"
+  run_once: true
+  changed_when: false

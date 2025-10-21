@@ -1,0 +1,4 @@
+---
+# Default variables for edge_containerd role
+containerd_config_dir: "/etc/containerd"
+containerd_socket: "unix:///run/containerd/containerd.sock"

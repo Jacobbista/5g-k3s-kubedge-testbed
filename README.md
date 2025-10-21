@@ -116,6 +116,7 @@ This testbed is designed for **5G research and testing** with emphasis on:
 - **Network Function Testing**: Complete 5G Core with realistic interfaces
 - **Migration Scenarios**: Dynamic UPF/MEC movement between cloud and edge
 - **Performance Analysis**: Ready for monitoring and benchmark tools
+- **Network Impairments**: Bandwidth limiting, latency injection, packet loss simulation via OVS/TC for realistic link conditions
 
 ## Documentation
 

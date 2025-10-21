@@ -1,4 +1,4 @@
-# Vagrantfile (pulito, conservativo)
+# Vagrantfile for the 5G Kubernetes Testbed
 Vagrant.configure("2") do |config|
   config.ssh.insert_key = true
   config.vm.box_check_update = false
@@ -33,9 +33,9 @@ Vagrant.configure("2") do |config|
     end
   end
 
-  # Provisioning per la VM "ansible"
+  # Provisioning for the "ansible" VM
   config.vm.define "ansible", primary: true do |ansible|
-    # --- Blocco root: pacchetti di sistema
+    # --- Root block: system packages
     ansible.vm.provision "shell", privileged: true, inline: <<-SHELL
       set -euo pipefail
       export DEBIAN_FRONTEND=noninteractive
@@ -43,24 +43,24 @@ Vagrant.configure("2") do |config|
       apt-get install -y python3-pip git
     SHELL
 
-    # --- Blocco utente vagrant: ansible + collections + ssh setup
+    # --- User vagrant block: ansible + collections + ssh setup
     ansible.vm.provision "shell", privileged: false, inline: <<-'SHELL'
       set -euo pipefail
       export PATH="$HOME/.local/bin:$PATH"
 
-      # Ansible per l'utente vagrant
+      # Ansible for the vagrant user
       python3 -m pip install --user 'ansible==9.7.0'
-      # Client Python per Kubernetes usato da kubernetes.core
+      # Client Python for Kubernetes used by kubernetes.core
       python3 -m pip install --user 'kubernetes>=29.0.0'
 
-      # Collections da requirements.yml SE presente
+      # Collections from requirements.yml if present
       if [ -f /home/vagrant/ansible-ro/requirements.yml ]; then
         ansible-galaxy collection install -r /home/vagrant/ansible-ro/requirements.yml
       else
-        echo "[INFO] /home/vagrant/ansible-ro/requirements.yml non trovato: salto install collections"
+        echo "[INFO] /home/vagrant/ansible-ro/requirements.yml not found: skipping collections installation"
       fi
 
-      # SSH keys dai private_key Vagrant montati in /vagrant/.vagrant
+      # SSH keys from private_key Vagrant mounted in /vagrant/.vagrant
       mkdir -p /home/vagrant/.ssh
       chmod 700 /home/vagrant/.ssh
       for vm in master worker edge; do
@@ -68,55 +68,71 @@ Vagrant.configure("2") do |config|
         if [ -f "$key_path" ]; then
           cp "$key_path" "/home/vagrant/.ssh/${vm}_key"
           chmod 600 "/home/vagrant/.ssh/${vm}_key"
-          echo "Copiata chiave SSH per $vm"
+          echo "Copied SSH key for $vm to /home/vagrant/.ssh/${vm}_key"
         else
-          echo "[WARN] Chiave non trovata per $vm (path: $key_path)"
+          echo "[WARN] Key not found for $vm (path: $key_path)"
         fi
       done
 
-      # Usa il tuo ssh_config già versionato nel repo
+      # Use ssh_config already versioned in the repo
       cp /home/vagrant/ansible-ro/ssh_config /home/vagrant/.ssh/config
       chmod 600 /home/vagrant/.ssh/config
 
-      # Workspace Ansible (scrivibile)
+      # Workspace Ansible (writable)
       mkdir -p /home/vagrant/ansible-work/{logs,cache,tmp,retry}
       cp /home/vagrant/ansible-ro/ansible.cfg /home/vagrant/ansible-work/ansible.cfg
       chmod 644 /home/vagrant/ansible-work/ansible.cfg
 
-      # Aggiungi PATH a .bashrc per sessioni interattive
+      # Add PATH to .bashrc for interactive sessions
       if ! grep -q 'export PATH=.*.local/bin' ~/.bashrc; then
         echo 'export PATH=$HOME/.local/bin:$PATH' >> ~/.bashrc
       fi
     SHELL
 
-    # --- Run finale (sempre): attesa SSH + playbook
+    # --- Final run (always): wait for SSH + timed playbook execution
+
     ansible.vm.provision "shell", run: "always", privileged: false, inline: <<-'SHELL'
       set -euo pipefail
       export PATH="$HOME/.local/bin:$PATH"
       export ANSIBLE_CONFIG=/home/vagrant/ansible-work/ansible.cfg
 
-      echo "=== Attendo che le VM siano pronte per SSH ==="
+      t0=$(date +%s)
+
+      echo "=== Waiting for SSH on VMs ==="
       wait_ssh() {
-        local host="$1"
-        local tries=15
+        local host="$1" tries=15
         for i in $(seq 1 $tries); do
           if ssh -o ConnectTimeout=10 -o BatchMode=yes "$host" 'echo OK' >/dev/null 2>&1; then
-            echo "$host raggiungibile (tentativo $i)"
+            echo "$host reachable (attempt $i)"
             return 0
           fi
-          echo "Tentativo $i: $host non raggiungibile, aspetto..."
+          echo "Attempt $i: $host not reachable, retrying..."
           sleep 10
         done
-        echo "ERRORE: $host non raggiungibile dopo $tries tentativi"
+        echo "ERROR: $host not reachable after $tries attempts"
         return 1
       }
 
-      for vm in master worker edge; do
-        wait_ssh "$vm"
-      done
+      for vm in master worker edge; do wait_ssh "$vm"; done
 
-      echo "=== Eseguo il playbook a fasi ==="
+      echo "=== Running phased playbook (timed) ==="
+      pb_t0=$(date +%s)
       ansible-playbook /home/vagrant/ansible-ro/phases/00-main-playbook.yml
+      pb_t1=$(date +%s)
+
+      t1=$(date +%s)
+
+      echo "=== Timing summary ==="
+      echo "Playbook runtime: $((pb_t1 - pb_t0)) seconds"
+      echo "Provisioning (this script): $((t1 - t0)) seconds"
+
+      # Optional: store timings for later use
+      mkdir -p /home/vagrant/ansible-work/logs
+      {
+        echo "playbook_seconds=$((pb_t1 - pb_t0))"
+        echo "provision_seconds=$((t1 - t0))"
+      } > /home/vagrant/ansible-work/logs/provision.timings
     SHELL
+
   end
 end

@@ -1,0 +1,33 @@
+---
+# EDGE CONTAINERD SETUP
+# Install and configure standalone containerd for KubeEdge EdgeCore on edge node
+
+- name: Install containerd
+  apt:
+    name: containerd
+    state: present
+    update_cache: yes
+
+- name: Ensure containerd config directory exists
+  file:
+    path: "{{ containerd_config_dir }}"
+    state: directory
+    mode: "0755"
+
+- name: Write containerd config with systemd cgroups
+  copy:
+    dest: "{{ containerd_config_dir }}/config.toml"
+    mode: "0644"
+    content: |
+      version = 2
+      [plugins."io.containerd.grpc.v1.cri".containerd.runtimes.runc]
+        runtime_type = "io.containerd.runc.v2"
+        [plugins."io.containerd.grpc.v1.cri".containerd.runtimes.runc.options]
+          SystemdCgroup = true
+  notify: restart containerd
+
+- name: Enable and start containerd
+  systemd:
+    name: containerd
+    enabled: yes
+    state: started

@@ -1,0 +1,389 @@
+"""
+End-to-End Tests for 5G K3s KubeEdge Testbed
+Tests complete system integration and functionality
+"""
+import sys
+import os
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from utils.k8s_client import K8sClient  # <-- use API client
+from utils.test_helpers import TestConfig, TestLogger, NetworkValidator, ComponentValidator
+
+
+class E2ETestSuite:
+    """End-to-End test suite for 5G testbed"""
+    
+    def __init__(self, verbose: bool = False):
+        self.config = TestConfig()
+        self.logger = TestLogger(verbose)
+        # keep attribute name 'kubectl' to avoid wider refactors
+        self.kubectl = K8sClient(self.config.get("cluster.kubeconfig_path"))
+        self.network_validator = NetworkValidator(self.kubectl, self.config)
+        self.component_validator = ComponentValidator(self.kubectl, self.config)
+        self.verbose = verbose
+    
+    def run_all_tests(self) -> bool:
+        """Run all E2E tests"""
+        self.logger.info("Starting End-to-End Test Suite")
+        
+        tests = [
+            ("Infrastructure Connectivity", self.test_infrastructure_connectivity),
+            ("Kubernetes Cluster Health", self.test_kubernetes_cluster_health),
+            ("KubeEdge Integration", self.test_kubeedge_integration),
+            ("Overlay Network Setup", self.test_overlay_network_setup),
+            ("5G Core Deployment", self.test_5g_core_deployment),
+            ("Network Interfaces", self.test_network_interfaces),
+            ("5G Protocol Connectivity", self.test_5g_protocol_connectivity),
+            ("UERANSIM Deployment", self.test_ueransim_deployment),
+            ("MEC Deployment", self.test_mec_deployment),
+            ("End-to-End Connectivity", self.test_end_to_end_connectivity)
+        ]
+        
+        passed = 0
+        failed = 0
+        
+        for test_name, test_func in tests:
+            self.logger.test_start(test_name)
+            try:
+                success = test_func()
+                if success:
+                    passed += 1
+                else:
+                    failed += 1
+            except Exception as e:
+                self.logger.error(f"{test_name} failed with exception: {e}")
+                failed += 1
+            self.logger.test_end(test_name, success)
+        
+        self.logger.info(f"E2E Test Results: {passed} passed, {failed} failed")
+        return failed == 0
+    
+    def test_infrastructure_connectivity(self) -> bool:
+        """Test basic infrastructure connectivity"""
+        self.logger.info("Testing infrastructure connectivity...")
+        
+        try:
+            nodes = self.kubectl.get_nodes()
+            if not nodes:
+                self.logger.error("No nodes found in cluster")
+                return False
+            
+            self.logger.success(f"Found {len(nodes)} nodes in cluster")
+            
+            for node in nodes:
+                node_name = node["metadata"]["name"]
+                conditions = node["status"]["conditions"]
+                ready_condition = next((c for c in conditions if c["type"] == "Ready"), None)
+                if not ready_condition or ready_condition["status"] != "True":
+                    self.logger.error(f"Node {node_name} is not Ready")
+                    return False
+            
+            self.logger.success("All nodes are Ready")
+            return True
+            
+        except Exception as e:
+            self.logger.error(f"Infrastructure connectivity test failed: {e}")
+            return False
+    
+    def test_kubernetes_cluster_health(self) -> bool:
+        """Test Kubernetes cluster health"""
+        self.logger.info("Testing Kubernetes cluster health...")
+        
+        try:
+            system_pods = self.kubectl.get_pods("kube-system")
+            running_system_pods = [p for p in system_pods if p["status"]["phase"] == "Running"]
+            
+            if len(running_system_pods) < 5:
+                self.logger.error(f"Too few system pods running: {len(running_system_pods)}")
+                return False
+            
+            self.logger.success(f"Found {len(running_system_pods)} running system pods")
+            
+            crashed_pods = [p for p in system_pods if p["status"]["phase"] in ["Failed", "CrashLoopBackOff"]]
+            if crashed_pods:
+                self.logger.error(f"Found crashed system pods: {[p['metadata']['name'] for p in crashed_pods]}")
+                return False
+            
+            self.logger.success("No crashed system pods found")
+            return True
+            
+        except Exception as e:
+            self.logger.error(f"Kubernetes cluster health test failed: {e}")
+            return False
+    
+    def test_kubeedge_integration(self) -> bool:
+        """Test KubeEdge integration"""
+        self.logger.info("Testing KubeEdge integration...")
+        
+        try:
+            kubeedge_pods = self.kubectl.get_pods("kubeedge")
+            if not kubeedge_pods:
+                self.logger.error("No KubeEdge pods found")
+                return False
+            
+            cloudcore_pods = [p for p in kubeedge_pods if "cloudcore" in p["metadata"]["name"].lower()]
+            if not cloudcore_pods:
+                self.logger.error("No CloudCore pods found")
+                return False
+            
+            running_cloudcore = [p for p in cloudcore_pods if p["status"]["phase"] == "Running"]
+            if not running_cloudcore:
+                self.logger.error("CloudCore is not running")
+                return False
+            
+            self.logger.success("KubeEdge CloudCore is running")
+            
+            nodes = self.kubectl.get_nodes()
+            edge_nodes = [n for n in nodes if "edge" in n["metadata"]["name"].lower()]
+            if not edge_nodes:
+                self.logger.error("No edge nodes found")
+                return False
+            
+            self.logger.success(f"Found {len(edge_nodes)} edge nodes")
+            return True
+            
+        except Exception as e:
+            self.logger.error(f"KubeEdge integration test failed: {e}")
+            return False
+    
+    def test_overlay_network_setup(self) -> bool:
+        """Test overlay network setup (Multus, OVS, VXLAN)"""
+        self.logger.info("Testing overlay network setup...")
+        
+        try:
+            multus_pods = self.kubectl.get_pods("kube-system")
+            multus_pods = [p for p in multus_pods if "multus" in p["metadata"]["name"].lower()]
+            
+            if not multus_pods:
+                self.logger.error("Multus pods not found")
+                return False
+            
+            running_multus = [p for p in multus_pods if p["status"]["phase"] == "Running"]
+            if len(running_multus) < 2:
+                self.logger.error(f"Not enough Multus pods running: {len(running_multus)}")
+                return False
+            
+            self.logger.success(f"Found {len(running_multus)} running Multus pods")
+            
+            nads = self.kubectl.get_network_attachments()
+            expected_nads = ["n1-net", "n2-net", "n3-net", "n4-net", "n6-mec-net", "n6-cld-net"]
+            
+            nad_names = [nad["metadata"]["name"] for nad in nads]
+            missing_nads = [nad for nad in expected_nads if nad not in nad_names]
+            
+            if missing_nads:
+                self.logger.error(f"Missing NetworkAttachmentDefinitions: {missing_nads}")
+                return False
+            
+            self.logger.success(f"Found {len(nads)} NetworkAttachmentDefinitions")
+            return True
+            
+        except Exception as e:
+            self.logger.error(f"Overlay network setup test failed: {e}")
+            return False
+    
+    def test_5g_core_deployment(self) -> bool:
+        """Test 5G Core deployment"""
+        self.logger.info("Testing 5G Core deployment...")
+        
+        try:
+            fiveg_pods = self.kubectl.get_pods("5g")
+            if not fiveg_pods:
+                self.logger.error("No 5G pods found")
+                return False
+            
+            components = ["amf", "smf", "upf"]
+            for component in components:
+                component_pods = [p for p in fiveg_pods if component in p["metadata"]["name"].lower()]
+                if not component_pods:
+                    self.logger.error(f"No {component.upper()} pods found")
+                    return False
+                
+                running_pods = [p for p in component_pods if p["status"]["phase"] == "Running"]
+                if not running_pods:
+                    self.logger.error(f"{component.upper()} is not running")
+                    return False
+                
+                self.logger.success(f"{component.upper()} is running")
+            
+            return True
+            
+        except Exception as e:
+            self.logger.error(f"5G Core deployment test failed: {e}")
+            return False
+    
+    def test_network_interfaces(self) -> bool:
+        """Test 5G network interfaces"""
+        self.logger.info("Testing 5G network interfaces...")
+        
+        try:
+            amf_pods = self.component_validator.get_component_pods("amf")
+            if not amf_pods:
+                self.logger.error("No AMF pods found for interface testing")
+                return False
+            
+            amf_pod = amf_pods[0]["metadata"]["name"]
+            
+            n1_ip = self.config.get("network.interfaces.n1.amf_ip")
+            if not self.network_validator.check_interface_ip(amf_pod, "5g", "n1", n1_ip):
+                self.logger.error(f"AMF N1 interface not configured with IP {n1_ip}")
+                return False
+            
+            self.logger.success("AMF N1 interface configured correctly")
+            
+            n2_ip = self.config.get("network.interfaces.n2.amf_ip")
+            if not self.network_validator.check_interface_ip(amf_pod, "5g", "n2", n2_ip):
+                self.logger.error(f"AMF N2 interface not configured with IP {n2_ip}")
+                return False
+            
+            self.logger.success("AMF N2 interface configured correctly")
+            
+            return True
+            
+        except Exception as e:
+            self.logger.error(f"Network interfaces test failed: {e}")
+            return False
+    
+    def test_5g_protocol_connectivity(self) -> bool:
+        """Test 5G protocol connectivity"""
+        self.logger.info("Testing 5G protocol connectivity...")
+        
+        try:
+            amf_pods = self.component_validator.get_component_pods("amf")
+            if not amf_pods:
+                self.logger.error("No AMF pods found for protocol testing")
+                return False
+            
+            amf_pod = amf_pods[0]["metadata"]["name"]
+            
+            if not self.network_validator.check_port_listening(amf_pod, "5g", 38412, "SCTP"):
+                self.logger.error("AMF not listening on SCTP port 38412")
+                return False
+            
+            self.logger.success("AMF listening on SCTP port 38412")
+            
+            smf_pods = self.component_validator.get_component_pods("smf")
+            if not smf_pods:
+                self.logger.error("No SMF pods found for protocol testing")
+                return False
+            
+            smf_pod = smf_pods[0]["metadata"]["name"]
+            
+            if not self.network_validator.check_port_listening(smf_pod, "5g", 8805, "UDP"):
+                self.logger.error("SMF not listening on PFCP port 8805")
+                return False
+            
+            self.logger.success("SMF listening on PFCP port 8805")
+            
+            return True
+            
+        except Exception as e:
+            self.logger.error(f"5G protocol connectivity test failed: {e}")
+            return False
+    
+    def test_ueransim_deployment(self) -> bool:
+        """Test UERANSIM deployment"""
+        self.logger.info("Testing UERANSIM deployment...")
+        
+        try:
+            gnb_pods = [p for p in self.kubectl.get_pods("5g") if "gnb" in p["metadata"]["name"].lower()]
+            if not gnb_pods:
+                self.logger.error("No gNB pods found")
+                return False
+            
+            running_gnb = [p for p in gnb_pods if p["status"]["phase"] == "Running"]
+            if not running_gnb:
+                self.logger.error("gNB is not running")
+                return False
+            
+            self.logger.success("gNB is running")
+            
+            ue_pods = [p for p in self.kubectl.get_pods("5g") if "ue" in p["metadata"]["name"].lower()]
+            if not ue_pods:
+                self.logger.error("No UE pods found")
+                return False
+            
+            running_ue = [p for p in ue_pods if p["status"]["phase"] == "Running"]
+            if not running_ue:
+                self.logger.error("UE is not running")
+                return False
+            
+            self.logger.success("UE is running")
+            return True
+            
+        except Exception as e:
+            self.logger.error(f"UERANSIM deployment test failed: {e}")
+            return False
+    
+    def test_mec_deployment(self) -> bool:
+        """Test MEC deployment"""
+        self.logger.info("Testing MEC deployment...")
+        
+        try:
+            mec_pods = self.kubectl.get_pods("mec")
+            if not mec_pods:
+                self.logger.warning("No MEC pods found (MEC might not be deployed)")
+                return True  # MEC is optional
+            
+            running_mec = [p for p in mec_pods if p["status"]["phase"] == "Running"]
+            if not running_mec:
+                self.logger.warning("No running MEC pods found")
+                return True  # MEC is optional
+            
+            self.logger.success(f"Found {len(running_mec)} running MEC pods")
+            return True
+            
+        except Exception as e:
+            self.logger.warning(f"MEC deployment test failed (MEC might not be deployed): {e}")
+            return True  # MEC is optional
+    
+    def test_end_to_end_connectivity(self) -> bool:
+        """Test end-to-end connectivity"""
+        self.logger.info("Testing end-to-end connectivity...")
+        
+        try:
+            fiveg_pods = self.kubectl.get_pods("5g")
+            if len(fiveg_pods) < 2:
+                self.logger.error("Need at least 2 pods for connectivity testing")
+                return False
+            
+            pod1 = fiveg_pods[0]["metadata"]["name"]
+            pod2 = fiveg_pods[1]["metadata"]["name"]
+            
+            # Exec now returns string stdout
+            pod1_ip = self.kubectl.exec_in_pod(pod1, "5g", ["hostname", "-i"]).strip()
+            pod2_ip = self.kubectl.exec_in_pod(pod2, "5g", ["hostname", "-i"]).strip()
+            
+            if not self.network_validator.check_connectivity(pod1, pod2, "5g", pod2_ip):
+                self.logger.error(f"Pod {pod1} cannot reach pod {pod2}")
+                return False
+            
+            self.logger.success(f"Pod {pod1} can reach pod {pod2}")
+            return True
+            
+        except Exception as e:
+            self.logger.error(f"End-to-end connectivity test failed: {e}")
+            return False
+
+
+def main():
+    """Main function for running E2E tests"""
+    import argparse
+    
+    parser = argparse.ArgumentParser(description="5G Testbed E2E Tests")
+    parser.add_argument("-v", "--verbose", action="store_true", help="Verbose output")
+    args = parser.parse_args()
+    
+    test_suite = E2ETestSuite(verbose=args.verbose)
+    success = test_suite.run_all_tests()
+    
+    if success:
+        print("\n🎉 All E2E tests passed!")
+        sys.exit(0)
+    else:
+        print("\n💥 Some E2E tests failed!")
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()

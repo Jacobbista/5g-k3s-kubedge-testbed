@@ -1,0 +1,91 @@
+---
+- name: Install system packages
+  ansible.builtin.apt:
+    name: "{{ packages_common }}"
+    state: present
+    update_cache: yes
+
+- name: Enable and start chrony
+  ansible.builtin.systemd:
+    name: chrony
+    state: started
+    enabled: true
+  notify: restart chrony
+
+- name: Install Open vSwitch on worker/edge
+  ansible.builtin.apt:
+    name: "{{ openvswitch_pkg }}"
+    state: present
+  when: enable_ovs_on_workers_edges and (inventory_hostname in groups['workers'] or inventory_hostname in groups['edges'])
+
+- name: Ensure Open vSwitch running on worker/edge
+  ansible.builtin.systemd:
+    name: openvswitch-switch
+    state: started
+    enabled: true
+  when: enable_ovs_on_workers_edges and (inventory_hostname in groups['workers'] or inventory_hostname in groups['edges'])
+  notify: restart openvswitch
+
+- name: Enable IPv4 forwarding
+  ansible.posix.sysctl:
+    name: net.ipv4.ip_forward
+    value: "1"
+    state: present
+    reload: yes
+
+# Optional NAT/forwarding for lab uplink
+- name: Accept FORWARD from uplink
+  ansible.builtin.iptables:
+    table: filter
+    chain: FORWARD
+    in_interface: "{{ uplink_iface }}"
+    jump: ACCEPT
+    comment: "Allow forwarding from uplink"
+  when: enable_node_nat
+
+- name: Accept FORWARD to uplink
+  ansible.builtin.iptables:
+    table: filter
+    chain: FORWARD
+    out_interface: "{{ uplink_iface }}"
+    jump: ACCEPT
+    comment: "Allow forwarding to uplink"
+  when: enable_node_nat
+
+- name: SNAT to uplink
+  ansible.builtin.iptables:
+    table: nat
+    chain: POSTROUTING
+    out_interface: "{{ uplink_iface }}"
+    jump: MASQUERADE
+    comment: "NAT for internal traffic"
+  when: enable_node_nat
+
+- name: Persist iptables rules
+  ansible.builtin.command: netfilter-persistent save
+  changed_when: true
+  when: enable_node_nat
+
+- name: Manage /etc/hosts from inventory
+  when: configure_hosts_from_inventory
+  ansible.builtin.template:
+    src: hosts.j2
+    dest: /etc/hosts
+    mode: "0644"
+
+# Lightweight reachability checks (inventory IPs)
+- name: Ping peers
+  when: validate_connectivity
+  ansible.builtin.command: "ping -c 1 -W 2 {{ hostvars[item]['ansible_host'] }}"
+  loop: "{{ groups['all'] | difference([inventory_hostname]) }}"
+  register: connectivity_test
+  changed_when: false
+  failed_when: false
+
+- name: Fail if any ping failed
+  ansible.builtin.fail:
+    msg: "Peer {{ item.item }} ({{ hostvars[item.item]['ansible_host'] }}) not reachable from {{ inventory_hostname }}"
+  loop: "{{ connectivity_test.results | selectattr('rc','ne',0) | list }}"
+  when:
+    - validate_connectivity
+    - (connectivity_test.results | selectattr('rc','ne',0) | list) | length > 0

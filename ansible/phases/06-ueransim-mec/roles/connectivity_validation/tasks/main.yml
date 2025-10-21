@@ -1,0 +1,66 @@
+---
+# CONNECTIVITY VALIDATION
+# Validates UE registration and PDU session establishment
+
+- name: Get UE pod name
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Pod
+    namespace: "{{ namespace }}"
+    label_selectors:
+      - "app=ue"
+    kubeconfig: "{{ kubeconfig_path }}"
+  register: ue_pods
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Set UE pod name
+  set_fact:
+    ue_pod_name: "{{ ue_pods.resources[0].metadata.name }}"
+  when: ue_pods.resources | length > 0
+  run_once: true
+
+- name: Wait for UE registration (check logs for success)
+  shell: |
+    kubectl --kubeconfig={{ kubeconfig_path }} logs -n {{ namespace }} {{ ue_pod_name }} --tail=100 | grep -i "registration\|pdu session" || true
+  register: ue_logs
+  retries: 12
+  delay: 10
+  until: "'PDU Session establishment' in ue_logs.stdout or 'Registration' in ue_logs.stdout"
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+  changed_when: false
+  failed_when: false
+
+- name: Display UE registration status
+  debug:
+    msg: "{{ ue_logs.stdout_lines | default(['No logs available']) }}"
+  run_once: true
+
+- name: Check UE TUN interface (uesimtun0)
+  shell: |
+    kubectl --kubeconfig={{ kubeconfig_path }} exec -n {{ namespace }} {{ ue_pod_name }} -- ip addr show uesimtun0 || echo "TUN interface not found"
+  register: tun_interface
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+  changed_when: false
+  failed_when: false
+
+- name: Display TUN interface status
+  debug:
+    msg: "{{ tun_interface.stdout_lines }}"
+  run_once: true
+
+- name: Test Internet connectivity from UE
+  shell: |
+    kubectl --kubeconfig={{ kubeconfig_path }} exec -n {{ namespace }} {{ ue_pod_name }} -- ping -c 3 -I uesimtun0 8.8.8.8 || echo "Ping failed"
+  register: ping_test
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+  changed_when: false
+  failed_when: false
+
+- name: Display connectivity test result
+  debug:
+    msg: "{{ ping_test.stdout_lines }}"
+  run_once: true

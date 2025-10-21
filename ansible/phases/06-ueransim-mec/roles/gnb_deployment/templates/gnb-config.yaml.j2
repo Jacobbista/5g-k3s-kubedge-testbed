@@ -1,0 +1,20 @@
+mcc: '{{ ueransim_topology.defaults.mcc }}'
+mnc: '{{ ueransim_topology.defaults.mnc }}'
+nci: '{{ cell.gnb.nci }}'
+idLength: 32
+tac: {{ cell.gnb.tac }}
+linkIp: 0.0.0.0
+ngapIp: 0.0.0.0
+gtpIp: 0.0.0.0
+gtpPort: 2152
+ngapPort: 38412
+amfConfigs:
+  - address: {{ ueransim_topology.defaults.amf_n2_ip }}
+    port: 38412
+slices:
+{% for slice in cell.gnb.slices | default([{ 'sst': 1, 'sd': 1 }]) %}
+  - sst: {{ slice.sst }}
+    sd: {{ slice.sd }}
+{% endfor %}
+ignoreStreamIds: true
+

@@ -1,0 +1,4 @@
+---
+# Infrastructure setup for UERANSIM
+ueransim_image: "jacobbista/comnetsemu-ueransim:latest"
+mec_image: "jacobbista/comnetsemu-mec:latest"

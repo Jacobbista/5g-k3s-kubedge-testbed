@@ -1,0 +1,79 @@
+---
+# VALIDATION FOR 5G CORE DEPLOYMENT
+# Uses kubernetes.core.k8s_info API (no shell commands)
+
+- name: Wait for MongoDB deployment to be available
+  kubernetes.core.k8s_info:
+    api_version: apps/v1
+    kind: Deployment
+    name: mongodb
+    namespace: "{{ namespace_5g }}"
+    kubeconfig: "{{ kubeconfig_path }}"
+  register: mongodb_deploy
+  retries: "{{ pod_ready_retries }}"
+  delay: "{{ pod_ready_delay }}"
+  until: >-
+    mongodb_deploy.resources | length > 0 and
+    mongodb_deploy.resources[0].status.availableReplicas | default(0) >= expected_pods.mongodb
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Wait for all 5G Core NF deployments to be available
+  kubernetes.core.k8s_info:
+    api_version: apps/v1
+    kind: Deployment
+    name: "{{ item.key }}"
+    namespace: "{{ namespace_5g }}"
+    kubeconfig: "{{ kubeconfig_path }}"
+  register: nf_deploy
+  retries: "{{ pod_ready_retries }}"
+  delay: "{{ pod_ready_delay }}"
+  until: >-
+    nf_deploy.resources | length > 0 and
+    nf_deploy.resources[0].status.availableReplicas | default(0) >= item.value
+  loop: "{{ expected_pods | dict2items }}"
+  when: item.key != 'mongodb'
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Get all 5G Core pods
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Pod
+    namespace: "{{ namespace_5g }}"
+    kubeconfig: "{{ kubeconfig_path }}"
+  register: core_pods
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Compute running pods count
+  set_fact:
+    running_pods_count: >-
+      {{ core_pods.resources | selectattr('status.phase', 'equalto', 'Running') | list | length }}
+
+- name: Assert minimum number of running pods
+  assert:
+    that:
+      - (running_pods_count | int) >= (expected_pods.values() | map('int') | sum)
+    fail_msg: "Not enough pods running: {{ running_pods_count }} / {{ expected_pods.values() | map('int') | sum }}"
+    success_msg: "All 5G Core pods running: {{ running_pods_count }} / {{ expected_pods.values() | map('int') | sum }}"
+
+- name: Get 5G Core services
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Service
+    namespace: "{{ namespace_5g }}"
+    kubeconfig: "{{ kubeconfig_path }}"
+  register: core_services
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Display deployment summary
+  debug:
+    msg:
+      - "✅ 5G Core Network Functions Deployed"
+      - "📦 Pods Running: {{ running_pods_count }}"
+      - "🌐 Services: {{ core_services.resources | length }}"
+      - ""
+      - "Pod List:"
+      - "{{ core_pods.resources | map(attribute='metadata.name') | list | join(', ') }}"

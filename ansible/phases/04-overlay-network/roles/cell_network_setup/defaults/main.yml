@@ -1,0 +1,18 @@
+---
+# Cell network setup defaults
+kubeconfig_path: "/home/vagrant/kubeconfig"
+namespace: "5g"
+
+# Subnet allocation per cell (Cell N → .N.0/24)
+cell_n2_subnet_prefix: "10.202"
+cell_n3_subnet_prefix: "10.203"
+subnet_mask: "24"
+ip_range_start: "10"
+ip_range_end: "250"
+
+# OVS bridge name prefixes
+ovs_bridge_prefix_n2: "br-n2-cell-"
+ovs_bridge_prefix_n3: "br-n3-cell-"
+
+# MTU for cell interfaces
+cell_mtu: 1450

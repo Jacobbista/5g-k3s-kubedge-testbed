@@ -1,0 +1,46 @@
+---
+# keadm install (idempotent)
+- name: Download keadm archive
+  get_url:
+    url: "https://github.com/kubeedge/kubeedge/releases/download/v{{ kubeedge_version }}/keadm-v{{ kubeedge_version }}-linux-amd64.tar.gz"
+    dest: /tmp/keadm.tgz
+    mode: "0644"
+  register: dl
+  retries: 5
+  delay: 6
+  until: dl is succeeded
+
+- name: Unpack keadm
+  unarchive:
+    src: /tmp/keadm.tgz
+    dest: /tmp
+    remote_src: true
+
+- name: Install keadm
+  copy:
+    src: "/tmp/keadm-v{{ kubeedge_version }}-linux-amd64/keadm/keadm"
+    dest: /usr/local/bin/keadm
+    mode: "0755"
+    remote_src: true
+
+# Copy kubeconfig from master to current host when required
+- name: Slurp kubeconfig from master
+  slurp:
+    src: /home/vagrant/kubeconfig
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+  register: kc
+
+- name: Write kubeconfig locally
+  copy:
+    content: "{{ kc.content | b64decode }}"
+    dest: "{{ kubeconfig_path }}"
+    owner: vagrant
+    group: vagrant
+    mode: "0600"
+
+- name: Point kubeconfig to master IP:6443
+  replace:
+    path: "{{ kubeconfig_path }}"
+    regexp: 'server:\s*https://[^\s]+:6443'
+    replace: "server: https://{{ hostvars[groups['masters'][0]]['ansible_host'] }}:6443"

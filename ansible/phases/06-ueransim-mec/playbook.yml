@@ -1,57 +1,72 @@
 ---
-# FASE 6: UERANSIM AND MEC SETUP
-# Deploy UERANSIM (gNB, UE) e MEC applications
+# PHASE 6: UERANSIM & MEC SETUP
+# Deploy simulated RAN (gNB + UE) and optional MEC application
 
-- name: "FASE 6: Deploy UERANSIM & MEC"
-  hosts: masters
-  become: yes
-  roles:
-    - { role: roles/ueransim_mec, tags: ['ueransim','mec'] }
-
-- name: "FASE 6: Verify UERANSIM and MEC Deployment"
-  hosts: masters
+- name: "PHASE 6 | Infrastructure Setup"
+  hosts: masters,workers,edges
   become: yes
   tags:
-    - verify
-  tasks:
-    - name: "UERANSIM | Get 5G pods"
-      kubernetes.core.k8s_info:
-        api_version: v1
-        kind: Pod
-        namespace: 5g
-        kubeconfig: "/home/vagrant/kubeconfig"
-      register: pods_5g_info
+    - phase6
+    - infrastructure_setup
+    - infra
+  vars_files:
+    - vars/topology.yml
+  roles:
+    - roles/infrastructure_setup
 
-    - name: "UERANSIM | Get MEC pods"
-      kubernetes.core.k8s_info:
-        api_version: v1
-        kind: Pod
-        namespace: mec
-        kubeconfig: "/home/vagrant/kubeconfig"
-      register: pods_mec_info
+- name: "PHASE 6 | Deploy gNB (simulated base station)"
+  hosts: masters
+  become: no
+  tags:
+    - phase6
+    - gnb_deployment
+    - gnb
+  vars_files:
+    - vars/topology.yml
+  roles:
+    - roles/gnb_deployment
 
-    - name: "UERANSIM | Get 5G services"
-      kubernetes.core.k8s_info:
-        api_version: v1
-        kind: Service
-        namespace: 5g
-        kubeconfig: "/home/vagrant/kubeconfig"
-      register: services_5g_info
+- name: "PHASE 6 | Sync gNB Endpoints (DNS)"
+  hosts: masters
+  become: no
+  tags:
+    - phase6
+    - endpoints_sync
+  roles:
+    - roles/endpoints_sync
 
-    - name: "UERANSIM | Display UERANSIM and MEC deployment status"
-      debug:
-        msg: |
-          ✅ UERANSIM & MEC Setup Complete
-          📦 5G Pods: {{ pods_5g_info.resources | length }}
-          {% for pod in pods_5g_info.resources %}
-          - {{ pod.metadata.name }}: {{ pod.status.phase }} ({{ pod.spec.nodeName }})
-          {% endfor %}
-          📦 MEC Pods: {{ pods_mec_info.resources | length }}
-          {% for pod in pods_mec_info.resources %}
-          - {{ pod.metadata.name }}: {{ pod.status.phase }} ({{ pod.spec.nodeName }})
-          {% endfor %}
-          🌐 5G Services: {{ services_5g_info.resources | length }}
-          {% for svc in services_5g_info.resources %}
-          - {{ svc.metadata.name }}: {{ svc.spec.type }} ({{ svc.spec.clusterIP }}:{{ svc.spec.ports[0].port }})
-          {% endfor %}
+- name: "PHASE 6 | Deploy UE (simulated user equipment)"
+  hosts: masters
+  become: no
+  tags:
+    - phase6
+    - ue_deployment
+    - ue
+  vars_files:
+    - vars/topology.yml
+  roles:
+    - roles/ue_deployment
 
+- name: "PHASE 6 | Validate Connectivity"
+  hosts: masters
+  become: no
+  tags:
+    - phase6
+    - connectivity_validation
+    - validation
+  vars_files:
+    - vars/topology.yml
+  roles:
+    - roles/connectivity_validation
+
+- name: "PHASE 6 | Deploy MEC Application (optional)"
+  hosts: masters
+  become: no
+  tags:
+    - phase6
+    - mec_deployment
+    - mec
+  vars_files:
+    - vars/topology.yml
+  roles:
+    - roles/mec_deployment

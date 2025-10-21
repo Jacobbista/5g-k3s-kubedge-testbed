@@ -3,7 +3,7 @@
   copy:
     src: "{{ role_path }}/../../configs/mongodb.conf"
     dest: /tmp/mongodb.conf
-    mode: '0644'
+    mode: "0644"
   delegate_to: "{{ groups['masters'][0] }}"
   run_once: true
 
@@ -26,7 +26,7 @@
   copy:
     src: "{{ role_path }}/../../scripts/"
     dest: /tmp/nf-scripts/
-    mode: '0755'
+    mode: "0755"
   delegate_to: "{{ groups['masters'][0] }}"
   run_once: true
 
@@ -53,12 +53,11 @@
   delegate_to: "{{ groups['masters'][0] }}"
   run_once: true
 
-
 - name: Create temp NRF config file on master
   copy:
     src: "{{ role_path }}/../../configs/nrf.yaml"
     dest: /tmp/nrf_cfg.yaml
-    mode: '0644'
+    mode: "0644"
   delegate_to: "{{ groups['masters'][0] }}"
   run_once: true
 
@@ -81,7 +80,7 @@
   copy:
     src: "{{ role_path }}/../../configs/amf.yaml"
     dest: /tmp/amf_cfg.yaml
-    mode: '0644'
+    mode: "0644"
   delegate_to: "{{ groups['masters'][0] }}"
   run_once: true
 
@@ -116,7 +115,7 @@
   copy:
     src: "{{ role_path }}/../../configs/smf.yaml"
     dest: /tmp/smf_cfg.yaml
-    mode: '0644'
+    mode: "0644"
   delegate_to: "{{ groups['masters'][0] }}"
   run_once: true
 
@@ -151,7 +150,7 @@
   copy:
     src: "{{ role_path }}/../../configs/upf_edge.yaml"
     dest: /tmp/upf_edge_cfg.yaml
-    mode: '0644'
+    mode: "0644"
   delegate_to: "{{ groups['masters'][0] }}"
   run_once: true
 
@@ -166,7 +165,7 @@
         name: upf-edge-config
         namespace: 5g
       data:
-        upf.yaml: "{{ lookup('file', role_path + '/../../configs/upf_edge.yaml') }}"
+        upf_edge.yaml: "{{ lookup('file', role_path + '/../../configs/upf_edge.yaml') }}"
   delegate_to: "{{ groups['masters'][0] }}"
   run_once: true
 
@@ -174,7 +173,7 @@
   copy:
     src: "{{ role_path }}/../../configs/upf_cloud.yaml"
     dest: /tmp/upf_cloud_cfg.yaml
-    mode: '0644'
+    mode: "0644"
   delegate_to: "{{ groups['masters'][0] }}"
   run_once: true
 
@@ -189,7 +188,7 @@
         name: upf-cloud-config
         namespace: 5g
       data:
-        upf.yaml: "{{ lookup('file', role_path + '/../../configs/upf_cloud.yaml') }}"
+        upf_cloud.yaml: "{{ lookup('file', role_path + '/../../configs/upf_cloud.yaml') }}"
   delegate_to: "{{ groups['masters'][0] }}"
   run_once: true
 
@@ -197,7 +196,7 @@
   copy:
     src: "{{ role_path }}/../../configs/udm.yaml"
     dest: /tmp/udm_cfg.yaml
-    mode: '0644'
+    mode: "0644"
   delegate_to: "{{ groups['masters'][0] }}"
   run_once: true
 
@@ -232,7 +231,7 @@
   copy:
     src: "{{ role_path }}/../../configs/udr.yaml"
     dest: /tmp/udr_cfg.yaml
-    mode: '0644'
+    mode: "0644"
   delegate_to: "{{ groups['masters'][0] }}"
   run_once: true
 
@@ -267,7 +266,7 @@
   copy:
     src: "{{ role_path }}/../../configs/pcf.yaml"
     dest: /tmp/pcf_cfg.yaml
-    mode: '0644'
+    mode: "0644"
   delegate_to: "{{ groups['masters'][0] }}"
   run_once: true
 
@@ -302,7 +301,7 @@
   copy:
     src: "{{ role_path }}/../../configs/bsf.yaml"
     dest: /tmp/bsf_cfg.yaml
-    mode: '0644'
+    mode: "0644"
   delegate_to: "{{ groups['masters'][0] }}"
   run_once: true
 
@@ -337,7 +336,7 @@
   copy:
     src: "{{ role_path }}/../../configs/nssf.yaml"
     dest: /tmp/nssf_cfg.yaml
-    mode: '0644'
+    mode: "0644"
   delegate_to: "{{ groups['masters'][0] }}"
   run_once: true
 
@@ -372,7 +371,7 @@
   copy:
     src: "{{ role_path }}/../../configs/ausf.yaml"
     dest: /tmp/ausf_cfg.yaml
-    mode: '0644'
+    mode: "0644"
   delegate_to: "{{ groups['masters'][0] }}"
   run_once: true
 
@@ -409,7 +408,7 @@
   copy:
     src: "{{ role_path }}/../../configs/mec.conf"
     dest: /tmp/mec.conf
-    mode: '0644'
+    mode: "0644"
   delegate_to: "{{ groups['masters'][0] }}"
   run_once: true
 

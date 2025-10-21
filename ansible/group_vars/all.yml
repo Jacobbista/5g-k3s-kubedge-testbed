@@ -9,6 +9,8 @@ mn_gw: 10.200.0.1
 k3s_channel: stable
 k3s_version: v1.30.6+k3s1
 kubeedge_version: 1.21.0
+cloudcore_port: 10000
+k3s_containerd_sock: unix:///run/k3s/containerd/containerd.sock
 
 kubeconfig_path: /home/vagrant/kubeconfig
 
@@ -26,9 +28,10 @@ upf_edge_n4_ip: 10.204.0.101
 upf_cloud_n4_ip: 10.204.0.102
 
 # Component versions/images (centralized)
-multus_version: 4.0.2
+multus_version: 4.1.0
 ovs_cni_version: 0.34.3
 whereabouts_version: 0.7.0
+cni_plugins_version: 1.5.1
 alpine_image: alpine:3.20
 overlay_mtu: 1450
 
@@ -76,3 +79,4 @@ test_n3_enabled: false
 test_n4_enabled: false
 test_n6e_enabled: false
 test_n6c_enabled: false
+# Phase 6 topology variables moved to ansible/phases/06-ueransim-mec/vars/topology.yml

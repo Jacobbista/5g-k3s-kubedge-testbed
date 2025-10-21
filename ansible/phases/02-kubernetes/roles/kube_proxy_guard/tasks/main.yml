@@ -1,0 +1,97 @@
+---
+# Ensure kube-proxy is deployed (k3s sometimes excludes it if misconfigured)
+
+- name: Check existing kube-proxy pods
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Pod
+    namespace: "{{ namespace_system }}"
+    label_selectors: ["k8s-app=kube-proxy"]
+    kubeconfig: "{{ kubeconfig_path }}"
+  register: kp
+
+- name: Apply kube-proxy ConfigMap (only if missing)
+  when: (kp.resources | length) == 0
+  kubernetes.core.k8s:
+    state: present
+    kubeconfig: "{{ kubeconfig_path }}"
+    definition:
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: kube-proxy
+        namespace: "{{ namespace_system }}"
+      data:
+        config.conf: |
+          apiVersion: kubeproxy.config.k8s.io/v1alpha1
+          kind: KubeProxyConfiguration
+          mode: "iptables"
+          clusterCIDR: "{{ cluster_cidr }}"
+
+- name: Apply kube-proxy DaemonSet (only if missing)
+  when: (kp.resources | length) == 0
+  kubernetes.core.k8s:
+    state: present
+    kubeconfig: "{{ kubeconfig_path }}"
+    definition:
+      apiVersion: apps/v1
+      kind: DaemonSet
+      metadata:
+        name: kube-proxy
+        namespace: "{{ namespace_system }}"
+        labels:
+          k8s-app: kube-proxy
+      spec:
+        selector:
+          matchLabels:
+            k8s-app: kube-proxy
+        template:
+          metadata:
+            labels:
+              k8s-app: kube-proxy
+          spec:
+            priorityClassName: system-node-critical
+            hostNetwork: true
+            nodeSelector:
+              node-type: worker
+            tolerations:
+              - operator: Exists
+            containers:
+              - name: kube-proxy
+                image: "{{ kube_proxy_image }}"
+                command:
+                  ["kube-proxy", "--config=/var/lib/kube-proxy/config.conf"]
+                securityContext: { privileged: true }
+                volumeMounts:
+                  - { name: kube-proxy, mountPath: /var/lib/kube-proxy }
+                  - {
+                      name: lib-modules,
+                      mountPath: /lib/modules,
+                      readOnly: true,
+                    }
+            volumes:
+              - name: kube-proxy
+                configMap:
+                  name: kube-proxy
+                  items:
+                    - { key: config.conf, path: config.conf }
+              - name: lib-modules
+                hostPath: { path: /lib/modules }
+
+- name: Wait for kube-proxy Ready (only if we just created it)
+  when: (kp.resources | length) == 0
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Pod
+    namespace: "{{ namespace_system }}"
+    label_selectors: ["k8s-app=kube-proxy"]
+    kubeconfig: "{{ kubeconfig_path }}"
+  register: kp_new
+  retries: 24
+  delay: 5
+  until: >-
+    kp_new.resources is defined and
+    (kp_new.resources | length) > 0 and
+    (kp_new.resources
+      | selectattr('status.phase', 'equalto', 'Running')
+      | list | length) >= 1

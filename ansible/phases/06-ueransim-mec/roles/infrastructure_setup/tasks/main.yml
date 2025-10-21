@@ -1,0 +1,37 @@
+---
+# INFRASTRUCTURE SETUP FOR UERANSIM
+# Prepares nodes with SCTP module and pre-pulls container images
+
+- name: Ensure SCTP kernel module loaded on worker
+  shell: |
+    modprobe sctp || true
+    echo sctp > /etc/modules-load.d/sctp.conf || true
+  delegate_to: "{{ groups['workers'][0] }}"
+  run_once: true
+  changed_when: false
+
+- name: Ensure SCTP kernel module loaded on edge
+  shell: |
+    modprobe sctp || true
+    echo sctp > /etc/modules-load.d/sctp.conf || true
+  delegate_to: "{{ groups['edges'][0] }}"
+  run_once: true
+  changed_when: false
+
+- name: Pre-pull UERANSIM image on worker
+  shell: crictl pull {{ ueransim_image }} || true
+  delegate_to: "{{ groups['workers'][0] }}"
+  run_once: true
+  changed_when: false
+
+- name: Pre-pull UERANSIM image on edge
+  shell: crictl pull {{ ueransim_image }} || true
+  delegate_to: "{{ groups['edges'][0] }}"
+  run_once: true
+  changed_when: false
+
+- name: Pre-pull MEC image on edge
+  shell: crictl pull {{ mec_image }} || true
+  delegate_to: "{{ groups['edges'][0] }}"
+  run_once: true
+  changed_when: false

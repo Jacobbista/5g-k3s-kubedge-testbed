@@ -1,0 +1,87 @@
+---
+# CREATE PER-CELL NETWORK ATTACHMENT DEFINITIONS (N2/N3)
+
+- name: Load topology vars
+  include_vars:
+    file: "{{ playbook_dir }}/../06-ueransim-mec/vars/topology.yml"
+
+- name: Get cell count from topology
+  set_fact:
+    cell_count: "{{ ueransim_topology.cells | length | int }}"
+
+- name: Create N2 NAD per cell
+  kubernetes.core.k8s:
+    state: present
+    kubeconfig: "{{ kubeconfig_path }}"
+    definition:
+      apiVersion: k8s.cni.cncf.io/v1
+      kind: NetworkAttachmentDefinition
+      metadata:
+        name: "n2-cell-{{ item }}"
+        namespace: "{{ namespace }}"
+      spec:
+        config: >-
+          {{
+            {
+              "cniVersion": "0.3.1",
+              "type": "ovs",
+              "bridge": ovs_bridge_prefix_n2 ~ item|string,
+              "mtu": cell_mtu,
+              "ipam": {
+                "type": "whereabouts",
+                "range": cell_n2_subnet_prefix ~ "." ~ item|string ~ ".0/" ~ subnet_mask,
+                "range_start": cell_n2_subnet_prefix ~ "." ~ item|string ~ "." ~ ip_range_start,
+                "range_end": cell_n2_subnet_prefix ~ "." ~ item|string ~ "." ~ ip_range_end
+              }
+            }
+            | to_json
+          }}
+  loop: "{{ range(1, (cell_count | int) + 1) | list }}"
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Create N3 NAD per cell
+  kubernetes.core.k8s:
+    state: present
+    kubeconfig: "{{ kubeconfig_path }}"
+    definition:
+      apiVersion: k8s.cni.cncf.io/v1
+      kind: NetworkAttachmentDefinition
+      metadata:
+        name: "n3-cell-{{ item }}"
+        namespace: "{{ namespace }}"
+      spec:
+        config: >-
+          {{
+            {
+              "cniVersion": "0.3.1",
+              "type": "ovs",
+              "bridge": ovs_bridge_prefix_n3 ~ item|string,
+              "mtu": cell_mtu,
+              "ipam": {
+                "type": "whereabouts",
+                "range": cell_n3_subnet_prefix ~ "." ~ item|string ~ ".0/" ~ subnet_mask,
+                "range_start": cell_n3_subnet_prefix ~ "." ~ item|string ~ "." ~ ip_range_start,
+                "range_end": cell_n3_subnet_prefix ~ "." ~ item|string ~ "." ~ ip_range_end
+              }
+            }
+            | to_json
+          }}
+  loop: "{{ range(1, (cell_count | int) + 1) | list }}"
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Wait for all cell NADs to exist
+  kubernetes.core.k8s_info:
+    api_version: k8s.cni.cncf.io/v1
+    kind: NetworkAttachmentDefinition
+    namespace: "{{ namespace }}"
+    kubeconfig: "{{ kubeconfig_path }}"
+  register: nads
+  retries: 10
+  delay: 3
+  until: >-
+    (nads.resources | selectattr('metadata.name','match','^n2-cell-') | list | length) >= (cell_count | int)
+    and (nads.resources | selectattr('metadata.name','match','^n3-cell-') | list | length) >= (cell_count | int)
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true

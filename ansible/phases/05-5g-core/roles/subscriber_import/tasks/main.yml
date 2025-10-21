@@ -1,5 +1,6 @@
 ---
-# Import Open5GS subscribers into MongoDB using an in-cluster Job
+# Import Open5GS subscribers into MongoDB using an in-cluster Job (Python + pymongo), script via ConfigMap
+
 - name: Read subscribers JSON from role directory (controller)
   slurp:
     src: "{{ role_path }}/subscribers/subscribers.json"
@@ -7,10 +8,40 @@
   run_once: true
   delegate_to: localhost
 
-- name: Compute checksum for idempotent resource names
+- name: Compute checksum for idempotent names
   set_fact:
     subs_checksum: "{{ (subs_json.content | b64decode) | hash('sha1') }}"
   run_once: true
+
+# Accept both shapes: { "subscribers": [...] } or directly [...]
+- name: Parse subscribers JSON and extract array
+  set_fact:
+    subs_array: >-
+      {{
+        (subs_json.content | b64decode | from_json).subscribers
+        | default((subs_json.content | b64decode | from_json), true)
+      }}
+  run_once: true
+
+# Optional: wait for MongoDB to be ready (1 pod Ready with label app=mongodb)
+- name: Wait for MongoDB pod Ready
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Pod
+    namespace: 5g
+    label_selectors: ["app=mongodb"]
+    kubeconfig: "/home/vagrant/kubeconfig"
+  register: mongo_pods
+  retries: 30
+  delay: 2
+  until: >
+    (mongo_pods.resources | length) > 0 and
+    (
+      (mongo_pods.resources[0].status.containerStatuses is defined) and
+      (
+        mongo_pods.resources[0].status.containerStatuses | selectattr('ready') | list | length
+      ) >= 1
+    )
 
 - name: Create ConfigMap with subscribers JSON
   kubernetes.core.k8s:
@@ -21,12 +52,31 @@
     state: present
     definition:
       data:
-        subs.json: "{{ (subs_json.content | b64decode | from_json) | to_json }}"
+        subs.json: "{{ subs_array | to_json }}"
     kubeconfig: "/home/vagrant/kubeconfig"
-  delegate_to: "{{ groups['masters'][0] }}"
-  run_once: true
 
-- name: Create Job to import subscribers into MongoDB
+- name: Create ConfigMap with importer script
+  kubernetes.core.k8s:
+    api_version: v1
+    kind: ConfigMap
+    name: "subscriber-importer-script-{{ subs_checksum }}"
+    namespace: 5g
+    state: present
+    definition:
+      data:
+        import_subscribers.py: "{{ lookup('template', role_path + '/templates/import_subscribers.py.j2') }}"
+    kubeconfig: "/home/vagrant/kubeconfig"
+
+- name: Delete previous import Job (fresh run)
+  kubernetes.core.k8s:
+    api_version: batch/v1
+    kind: Job
+    name: "sub-import-{{ subs_checksum }}"
+    namespace: 5g
+    state: absent
+    kubeconfig: "/home/vagrant/kubeconfig"
+
+- name: Create Job to import subscribers into MongoDB (Python + pymongo)
   kubernetes.core.k8s:
     api_version: batch/v1
     kind: Job
@@ -38,40 +88,40 @@
         backoffLimit: 0
         template:
           spec:
+            nodeSelector:
+              kubernetes.io/hostname: worker
             restartPolicy: Never
             containers:
-            - name: importer
-              image: python:3.11
-              command: ["bash","-lc"]
-              args:
-                - |
-                  set -e
-                  pip install -q 'pymongo<4.0'
-                  python - <<'PY'
-                  import json
-                  from pymongo import MongoClient
-                  with open('/data/subs.json') as f:
-                      data = json.load(f)
-                  client = MongoClient('mongodb://mongodb:27017/')
-                  col = client['open5gs']['subscribers']
-                  cnt = 0
-                  for s in data.get('subscribers', []):
-                      col.update_one({'imsi': s['imsi']}, {'$set': s}, upsert=True)
-                      cnt += 1
-                  print(f"Imported/updated {cnt} subscribers")
-                  PY
-              volumeMounts:
-                - name: subs
-                  mountPath: /data
+              - name: importer
+                image: python:3.11-slim
+                imagePullPolicy: IfNotPresent
+                command: ["bash", "-lc"]
+                args:
+                  - |
+                    set -euo pipefail
+                    python -m pip install --no-cache-dir -q "pymongo>=3.12,<4"
+                    python /script/import_subscribers.py
+                env:
+                  - name: MONGO_URI
+                    value: "mongodb://mongodb:27017/open5gs"
+                  - name: SUBS_FILE
+                    value: "/work/subs.json"
+                volumeMounts:
+                  - name: subs
+                    mountPath: /work
+                  - name: script
+                    mountPath: /script
             volumes:
               - name: subs
                 configMap:
                   name: "subscribers-json-{{ subs_checksum }}"
+              - name: script
+                configMap:
+                  name: "subscriber-importer-script-{{ subs_checksum }}"
     kubeconfig: "/home/vagrant/kubeconfig"
-  delegate_to: "{{ groups['masters'][0] }}"
-  run_once: true
 
-- name: Wait for import Job to complete (up to 90s)
+# Wait until the Job either succeeds or fails, then surface logs on failure
+- name: Wait for Job condition (Complete/Failed)
   kubernetes.core.k8s_info:
     api_version: batch/v1
     kind: Job
@@ -79,10 +129,35 @@
     namespace: 5g
     kubeconfig: "/home/vagrant/kubeconfig"
   register: job_info
-  retries: 18
-  delay: 5
-  until: job_info.resources | length > 0 and (job_info.resources[0].status.succeeded | default(0) | int) >= 1
-  delegate_to: "{{ groups['masters'][0] }}"
-  run_once: true
+  retries: 20
+  delay: 3
+  until: >
+    job_info.resources | length > 0 and (
+      (job_info.resources[0].status.succeeded | default(0) | int) >= 1 or
+      (job_info.resources[0].status.failed | default(0) | int) >= 1
+    )
 
+- name: Get Job pods
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Pod
+    namespace: 5g
+    label_selectors: ["job-name=sub-import-{{ subs_checksum }}"]
+    kubeconfig: "/home/vagrant/kubeconfig"
+  register: job_pods
 
+- name: Print Job logs on failure
+  when: (job_info.resources[0].status.succeeded | default(0) | int) < 1
+  command: >
+    kubectl --kubeconfig=/home/vagrant/kubeconfig -n 5g
+    logs {{ job_pods.resources[0].metadata.name }} -c importer --tail=200
+  register: job_logs
+  changed_when: false
+
+- name: Fail if Job failed
+  when: (job_info.resources[0].status.succeeded | default(0) | int) < 1
+  fail:
+    msg: |
+      Subscriber import Job failed.
+      --- POD LOGS ---
+      {{ job_logs.stdout }}

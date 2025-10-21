@@ -1,0 +1,88 @@
+---
+# KUBEEDGE CLOUDCORE NODE SETUP
+# Install KubeEdge CloudCore on the worker node
+- name: Ensure kubeedge namespace
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Namespace
+      metadata: { name: kubeedge }
+    kubeconfig: "{{ kubeconfig_path }}"
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Init CloudCore if not already running
+  block:
+    - name: Check CloudCore pods
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Pod
+        namespace: kubeedge
+        kubeconfig: "{{ kubeconfig_path }}"
+      register: pods
+      delegate_to: "{{ groups['masters'][0] }}"
+
+    - name: Run keadm init
+      when: (pods.resources | selectattr('status.phase','equalto','Running') | list | length) == 0
+      shell: >
+        /usr/local/bin/keadm init
+        --kube-config={{ kubeconfig_path }}
+        --advertise-address={{ ansible_host }}
+        --kubeedge-version={{ kubeedge_version }}
+        --force
+      args:
+        creates: /etc/kubeedge/cloudcore.yaml
+
+    - name: Wait for CloudCore Running
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Pod
+        namespace: kubeedge
+        kubeconfig: "{{ kubeconfig_path }}"
+      register: pods_after
+      retries: 36
+      delay: 5
+      until: (pods_after.resources | selectattr('status.phase','equalto','Running') | list | length) >= 1
+      delegate_to: "{{ groups['masters'][0] }}"
+
+    - name: Ensure CloudCore is pinned to worker node
+      kubernetes.core.k8s:
+        api_version: apps/v1
+        kind: Deployment
+        name: cloudcore
+        namespace: kubeedge
+        kubeconfig: "{{ kubeconfig_path }}"
+        definition:
+          spec:
+            template:
+              spec:
+                nodeSelector:
+                  node-type: worker
+      delegate_to: "{{ groups['masters'][0] }}"
+
+- name: Open CloudCore port (TCP/UDP 10000)
+  iptables:
+    chain: INPUT
+    protocol: "{{ item.proto }}"
+    destination_port: "{{ cloudcore_port }}"
+    jump: ACCEPT
+    comment: "KubeEdge CloudCore {{ item.proto }} {{ cloudcore_port }}"
+  loop:
+    - { proto: tcp }
+    - { proto: udp }
+
+- name: Get edge join token
+  shell: /usr/local/bin/keadm gettoken --kube-config={{ kubeconfig_path }}
+  register: token
+  retries: 20
+  delay: 3
+  until: token.rc == 0 and (token.stdout | length) > 0
+
+- name: Save edge token for distribution
+  copy:
+    content: "{{ token.stdout }}"
+    dest: /home/vagrant/edge_token
+    owner: vagrant
+    group: vagrant
+    mode: "0600"

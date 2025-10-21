@@ -1,112 +1,70 @@
 ---
-- name: "CNI | Ensure k3s CNI binary directory exists"
-  file:
-    path: /var/lib/rancher/k3s/data/cni/bin
-    state: directory
-    mode: '0755'
+- name: Check if k3s node
+  stat:
+    path: /var/lib/rancher/k3s
+  register: k3s_present
 
-- name: "CNI | Download and install Whereabouts binary"
+- name: Set CNI paths
+  set_fact:
+    is_k3s_node: "{{ k3s_present.stat.exists }}"
+    cni_download_dir: "{{ '/var/lib/rancher/k3s/data/cni/bin' if k3s_present.stat.exists else '/opt/cni/bin' }}"
+
+- name: Ensure CNI binary directory
+  file:
+    path: "{{ cni_download_dir }}"
+    state: directory
+    mode: "0755"
+
+- name: Download Whereabouts
   get_url:
     url: "https://github.com/k8snetworkplumbingwg/whereabouts/releases/download/v{{ whereabouts_version }}/whereabouts-amd64"
-    dest: "/var/lib/rancher/k3s/data/cni/bin/whereabouts"
-    mode: '0755'
-    force: yes
+    dest: "{{ cni_download_dir }}/whereabouts"
+    mode: "0755"
   retries: 3
-  delay: 5
-  register: whereabouts_dl
-  until: whereabouts_dl is succeeded
+  delay: 3
 
-- name: "CNI | Download and install OVS CNI binary"
+- name: Download OVS CNI
   get_url:
     url: "https://github.com/k8snetworkplumbingwg/ovs-cni/releases/download/v{{ ovs_cni_version }}/ovs"
-    dest: "/var/lib/rancher/k3s/data/cni/bin/ovs"
-    mode: '0755'
-    force: yes
+    dest: "{{ cni_download_dir }}/ovs"
+    mode: "0755"
   retries: 3
-  delay: 5
-  register: ovs_dl
-  until: ovs_dl is succeeded
+  delay: 3
 
-- name: "CNI | Ensure /opt/cni/bin exists and install base plugins for kubelet"
-  shell: |
-    set -e
-    mkdir -p /opt/cni/bin
-    for p in flannel portmap bandwidth bridge host-local loopback static; do
-      # remove dangling symlink if present before copying
-      [ -L /opt/cni/bin/$p ] && rm -f /opt/cni/bin/$p || true
-      if [ -f /var/lib/rancher/k3s/data/cni/$p ]; then
-        install -m 0755 -D /var/lib/rancher/k3s/data/cni/$p /opt/cni/bin/$p
-      elif [ -f /var/lib/rancher/k3s/data/cni/bin/$p ]; then
-        install -m 0755 -D /var/lib/rancher/k3s/data/cni/bin/$p /opt/cni/bin/$p
-      elif [ -f /var/lib/rancher/k3s/data/current/bin/$p ]; then
-        install -m 0755 -D /var/lib/rancher/k3s/data/current/bin/$p /opt/cni/bin/$p
-      fi
-    done
-    # Copy ovs and whereabouts into /opt/cni/bin as real files (avoid dangling symlinks in Multus pod)
-    if [ -f /var/lib/rancher/k3s/data/cni/bin/ovs ]; then 
-      [ -L /opt/cni/bin/ovs ] && rm -f /opt/cni/bin/ovs || true
-      install -m 0755 -D /var/lib/rancher/k3s/data/cni/bin/ovs /opt/cni/bin/ovs
-    fi
-    if [ -f /var/lib/rancher/k3s/data/cni/bin/whereabouts ]; then 
-      [ -L /opt/cni/bin/whereabouts ] && rm -f /opt/cni/bin/whereabouts || true
-      install -m 0755 -D /var/lib/rancher/k3s/data/cni/bin/whereabouts /opt/cni/bin/whereabouts
-    fi
-  changed_when: true
+- name: Create temp directory for CNI extraction
+  file:
+    path: /tmp/cni-extract
+    state: directory
 
-- name: "CNI | Also ensure base plugins present in /var/lib/rancher/k3s/data/cni (CRI binDir)"
-  shell: |
-    set -e
-    mkdir -p /var/lib/rancher/k3s/data/cni
-    for p in flannel portmap bandwidth bridge host-local loopback static; do
-      # remove dangling symlink if present before copying
-      [ -L /var/lib/rancher/k3s/data/cni/$p ] && rm -f /var/lib/rancher/k3s/data/cni/$p || true
-      if [ -f /var/lib/rancher/k3s/data/cni/$p ]; then
-        true
-      elif [ -f /var/lib/rancher/k3s/data/cni/bin/$p ]; then
-        install -m 0755 -D /var/lib/rancher/k3s/data/cni/bin/$p /var/lib/rancher/k3s/data/cni/$p
-      elif [ -f /var/lib/rancher/k3s/data/current/bin/$p ]; then
-        install -m 0755 -D /var/lib/rancher/k3s/data/current/bin/$p /var/lib/rancher/k3s/data/cni/$p
-      elif [ -f /opt/cni/bin/$p ]; then
-        install -m 0755 -D /opt/cni/bin/$p /var/lib/rancher/k3s/data/cni/$p
-      fi
-    done
-  changed_when: true
+- name: Download and extract static plugin
+  unarchive:
+    src: "https://github.com/containernetworking/plugins/releases/download/v{{ cni_plugins_version }}/cni-plugins-linux-amd64-v{{ cni_plugins_version }}.tgz"
+    dest: /tmp/cni-extract
+    remote_src: yes
 
-- name: "CNI | Replace broken symlinks in k3s current/bin with real binaries"
-  shell: |
-    set -e
-    for p in flannel portmap bandwidth bridge host-local loopback static; do
-      if [ -L /var/lib/rancher/k3s/data/current/bin/$p ]; then
-        rm -f /var/lib/rancher/k3s/data/current/bin/$p
-        if [ -f /opt/cni/bin/$p ]; then
-          install -m 0755 -D /opt/cni/bin/$p /var/lib/rancher/k3s/data/current/bin/$p
-        elif [ -f /var/lib/rancher/k3s/data/cni/$p ]; then
-          install -m 0755 -D /var/lib/rancher/k3s/data/cni/$p /var/lib/rancher/k3s/data/current/bin/$p
-        fi
-      fi
-    done
-  changed_when: true
+- name: Install static plugin
+  copy:
+    src: /tmp/cni-extract/static
+    dest: "{{ cni_download_dir }}/static"
+    mode: "0755"
+    remote_src: yes
 
-- name: "CNI | Ensure static IPAM plugin present (fallback to download if missing)"
-  shell: |
-    set -e
-    if [ ! -f /opt/cni/bin/static ]; then
-      TMPDIR=$(mktemp -d)
-      VERSION="${CNI_PLUGINS_VERSION:-1.5.1}"
-      ARCH="amd64"
-      URL="https://github.com/containernetworking/plugins/releases/download/v${VERSION}/cni-plugins-linux-${ARCH}-v${VERSION}.tgz"
-      curl -fsSL -o "$TMPDIR/cni.tgz" "$URL"
-      tar -xzf "$TMPDIR/cni.tgz" -C "$TMPDIR"
-      install -m 0755 -D "$TMPDIR/static" /opt/cni/bin/static
-      rm -rf "$TMPDIR"
-    fi
-  changed_when: false
+- name: Create k3s symlinks
+  when: is_k3s_node | bool
+  file:
+    src: "{{ cni_download_dir }}/{{ item }}"
+    dest: "/var/lib/rancher/k3s/data/cni/{{ item }}"
+    state: link
+    force: yes
+  loop:
+    - whereabouts
+    - ovs
+    - static
 
-- name: "CNI | Verify base plugins present in /opt/cni/bin"
-  shell: ls -1 /opt/cni/bin | egrep "^(flannel|portmap|bandwidth|bridge|host-local|loopback|static)$" | sort
-  register: cni_opt_list
-  changed_when: false
-
-- name: "CNI | Show /opt/cni/bin base plugins"
-  debug:
-    var: cni_opt_list.stdout_lines
+- name: Download standard CNI plugins for edge
+  when: not (is_k3s_node | bool)
+  unarchive:
+    src: "https://github.com/containernetworking/plugins/releases/download/v{{ cni_plugins_version }}/cni-plugins-linux-amd64-v{{ cni_plugins_version }}.tgz"
+    dest: /opt/cni/bin
+    remote_src: yes
+    creates: /opt/cni/bin/bridge

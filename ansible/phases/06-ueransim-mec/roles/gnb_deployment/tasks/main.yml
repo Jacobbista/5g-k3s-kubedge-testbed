@@ -1,0 +1,52 @@
+---
+# GNB DEPLOYMENT (Deployment per cell)
+# Deploy gNBs driven by ueransim_topology
+
+- name: Load topology vars
+  include_vars:
+    file: "{{ playbook_dir }}/vars/topology.yml"
+
+- name: Create gNB ConfigMaps per cell
+  kubernetes.core.k8s:
+    state: present
+    kubeconfig: "{{ kubeconfig_path }}"
+    definition:
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: "{{ item.gnb.name }}-config"
+        namespace: "{{ namespace }}"
+      data:
+        gnb.yaml: "{{ lookup('template', 'gnb-config.yaml.j2', template_vars={'cell': item}) }}"
+  loop: "{{ ueransim_topology.cells }}"
+  loop_control:
+    label: "{{ item.gnb.name }}"
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Deploy gNB Services + Deployments
+  kubernetes.core.k8s:
+    state: present
+    kubeconfig: "{{ kubeconfig_path }}"
+    definition: "{{ lookup('template', 'gnb-deployment.yaml.j2') }}"
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Wait for gNB pods ready (per cell)
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Pod
+    namespace: "{{ namespace }}"
+    label_selectors: ["app={{ item.gnb.name }}"]
+    kubeconfig: "{{ kubeconfig_path }}"
+  register: gnb_pods
+  retries: 30
+  delay: 10
+  until: >-
+    gnb_pods.resources | length > 0 and
+    (gnb_pods.resources | selectattr('status.phase','equalto','Running') | list | length) >= 1
+  loop: "{{ ueransim_topology.cells }}"
+  loop_control:
+    label: "{{ item.gnb.name }}"
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
