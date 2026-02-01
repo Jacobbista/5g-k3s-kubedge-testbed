@@ -19,6 +19,16 @@ kubeconfig_path: /home/vagrant/kubeconfig
 amf_n1_ip: 10.201.0.100
 # N2 AMF static IP (must be within n2-net NAD range)
 amf_n2_ip: 10.202.0.100
+# Per-cell N2/N3 IP components (AMF and gNB connect via per-cell overlay)
+# N2: AMF={cell_n2_subnet_prefix}.{cell_id}.{amf_cell_n2_ip_suffix}
+#     gNB={cell_n2_subnet_prefix}.{cell_id}.{gnb_cell_n2_ip_suffix}
+# N3: gNB={cell_n3_subnet_prefix}.{cell_id}.{gnb_cell_n3_ip_suffix}
+# Example cell 1: AMF N2=10.202.1.10, gNB N2=10.202.1.11, gNB N3=10.203.1.11
+cell_n2_subnet_prefix: "10.202"
+cell_n3_subnet_prefix: "10.203"
+amf_cell_n2_ip_suffix: 10
+gnb_cell_n2_ip_suffix: 11
+gnb_cell_n3_ip_suffix: 11
 # N3 UPF static IPs (must be within n3-net NAD range)
 upf_edge_n3_ip: 10.203.0.100
 upf_cloud_n3_ip: 10.203.0.101
@@ -79,4 +89,19 @@ test_n3_enabled: false
 test_n4_enabled: false
 test_n6e_enabled: false
 test_n6c_enabled: false
+
+# Physical RAN Integration (for femtocell/small cell connectivity)
+# See docs/physical-ran-integration.md for details
+#
+# ran_bridge_mode options:
+#   - disabled: No physical RAN bridging (default, use UERANSIM)
+#   - n2_only:  Bridge to N2 network only (control plane for NGAP/SCTP)
+#   - n3_only:  Bridge to N3 network only (user plane for GTP-U)
+#   - n2_n3:    Bridge to both N2 and N3 (full connectivity)
+#
+# ran_interface: Physical interface to bridge (auto-detected if empty)
+#                Usually enp0s9 or eth2 on worker VM
+ran_bridge_mode: disabled
+ran_interface: ""
+
 # Phase 6 topology variables moved to ansible/phases/06-ueransim-mec/vars/topology.yml

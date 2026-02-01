@@ -7,6 +7,7 @@ amf:
     server:
       - address: 0.0.0.0
         port: 7777
+        advertise: amf
     client:
       nrf:
         - uri: http://nrf:7777
@@ -14,6 +15,7 @@ amf:
         - uri: http://ausf:7777
       udm:
         - uri: http://udm:7777
+    no_tls: true
   ngap:
     server:
       - address: 0.0.0.0

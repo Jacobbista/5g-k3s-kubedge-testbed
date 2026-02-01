@@ -50,7 +50,8 @@ class TestConfig:
             env_kcfg = os.environ.get("KUBECONFIG")
             if env_kcfg and Path(env_kcfg).exists():
                 return env_kcfg
-            local_kcfg = Path(__file__).resolve().parent.parent / "tests" / "kubeconfig"
+            # tests/utils/test_helpers.py -> parent.parent = tests/ -> kubeconfig
+            local_kcfg = Path(__file__).resolve().parent.parent / "kubeconfig"
             if local_kcfg.exists():
                 return str(local_kcfg)
 
@@ -105,9 +106,10 @@ class NetworkValidator:
     ):
         """Return True/False; if capture=True return (ok, output)."""
         try:
-            out = self.kubectl.exec_in_pod(
+            result = self.kubectl.exec_in_pod(
                 pod_name, namespace, ["ip", "addr", "show", interface]
             )
+            out = result.stdout
             ok = expected_ip in out
             return (ok, out) if capture else ok
         except Exception as e:
@@ -119,11 +121,12 @@ class NetworkValidator:
         """Return True/False; if capture=True return (ok, output)."""
         try:
             if protocol.upper() == "SCTP":
-                out = self.kubectl.exec_in_pod(pod_name, namespace, ["ss", "-S", "-na"])
+                result = self.kubectl.exec_in_pod(pod_name, namespace, ["ss", "-S", "-na"])
             elif protocol.upper() == "UDP":
-                out = self.kubectl.exec_in_pod(pod_name, namespace, ["ss", "-unap"])
+                result = self.kubectl.exec_in_pod(pod_name, namespace, ["ss", "-unap"])
             else:
-                out = self.kubectl.exec_in_pod(pod_name, namespace, ["ss", "-tnap"])
+                result = self.kubectl.exec_in_pod(pod_name, namespace, ["ss", "-tnap"])
+            out = result.stdout
             ok = str(port) in out
             return (ok, out) if capture else ok
         except Exception as e:
@@ -134,9 +137,10 @@ class NetworkValidator:
     ):
         """ping - returns True/False; if capture=True return (ok, output)."""
         try:
-            out = self.kubectl.exec_in_pod(
+            result = self.kubectl.exec_in_pod(
                 pod1_name, namespace, ["ping", "-c", "3", "-W", "5", target_ip]
             )
+            out = result.stdout
             ok = (" 0% packet loss" in out) or ("bytes from" in out) or ("ttl=" in out)
             return (ok, out) if capture else ok
         except Exception as e:
@@ -168,13 +172,13 @@ class ComponentValidator:
         if not pods:
             return []
         try:
-            out = self.kubectl.exec_in_pod(
+            result = self.kubectl.exec_in_pod(
                 pods[0]["metadata"]["name"],
                 namespace,
                 ["ip", "link", "show"],
             )
             interfaces: List[str] = []
-            for line in out.split("\n"):
+            for line in result.stdout.split("\n"):
                 if ":" in line and not line.startswith(" "):
                     iface = line.split(":", 2)[1].strip()
                     if iface and not iface.startswith("lo"):

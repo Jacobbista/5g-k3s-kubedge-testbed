@@ -50,6 +50,11 @@ spec:
           value: "{{ hostvars[groups['edges'][0]]['ansible_host'] }}"
         - name: CELL_COUNT
           value: "{{ cell_count | default('0') }}"
+        # Physical RAN bridging (for femtocell integration)
+        - name: RAN_INTERFACE
+          value: "{{ ran_interface | default('') }}"
+        - name: RAN_BRIDGE_MODE
+          value: "{{ ran_bridge_mode | default('disabled') }}"
         command: ["sh","-c"]
         args:
           - |

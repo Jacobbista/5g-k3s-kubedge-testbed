@@ -1,6 +1,97 @@
 ---
 # INFRASTRUCTURE SETUP FOR UERANSIM
-# Prepares nodes with SCTP module and pre-pulls container images
+# Prepares nodes with SCTP module, pre-pulls container images,
+# and creates discovery token for dynamic IP discovery on edge nodes.
+#
+# The discovery token is a long-lived token stored in a Secret.
+# Edge nodes use this token to query K8s API for AMF/gNB IPs at startup.
+# This works around KubeEdge's limitation with bound ServiceAccount tokens.
+
+- name: Load topology vars
+  include_vars:
+    file: "{{ playbook_dir }}/vars/topology.yml"
+
+# ============================================================================
+# DISCOVERY TOKEN SETUP (for edge node API queries)
+# ============================================================================
+
+- name: Create discovery ServiceAccount
+  kubernetes.core.k8s:
+    state: present
+    kubeconfig: "{{ kubeconfig_path }}"
+    definition:
+      apiVersion: v1
+      kind: ServiceAccount
+      metadata:
+        name: edge-discovery
+        namespace: "{{ namespace }}"
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Create discovery Role (read pods/endpoints)
+  kubernetes.core.k8s:
+    state: present
+    kubeconfig: "{{ kubeconfig_path }}"
+    definition:
+      apiVersion: rbac.authorization.k8s.io/v1
+      kind: Role
+      metadata:
+        name: edge-discovery
+        namespace: "{{ namespace }}"
+      rules:
+        - apiGroups: [""]
+          resources: ["pods", "endpoints"]
+          verbs: ["get", "list"]
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Create discovery RoleBinding
+  kubernetes.core.k8s:
+    state: present
+    kubeconfig: "{{ kubeconfig_path }}"
+    definition:
+      apiVersion: rbac.authorization.k8s.io/v1
+      kind: RoleBinding
+      metadata:
+        name: edge-discovery
+        namespace: "{{ namespace }}"
+      subjects:
+        - kind: ServiceAccount
+          name: edge-discovery
+          namespace: "{{ namespace }}"
+      roleRef:
+        kind: Role
+        name: edge-discovery
+        apiGroup: rbac.authorization.k8s.io
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Generate long-lived discovery token (1 year)
+  shell: |
+    sudo k3s kubectl create token edge-discovery -n {{ namespace }} --duration=8760h
+  register: discovery_token_result
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+  changed_when: false
+
+- name: Create/Update discovery-token ConfigMap
+  kubernetes.core.k8s:
+    state: present
+    kubeconfig: "{{ kubeconfig_path }}"
+    definition:
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: discovery-token
+        namespace: "{{ namespace }}"
+      data:
+        token: "{{ discovery_token_result.stdout }}"
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+# ============================================================================
+# NODE PREPARATION
+# ============================================================================
 
 - name: Ensure SCTP kernel module loaded on worker
   shell: |

@@ -1,7 +1,19 @@
 # Vagrantfile for the 5G Kubernetes Testbed
+#
+# DEPLOYMENT MODES:
+#   vagrant up                       - Deploy 5G Core only (phases 1-5), DEFAULT
+#   DEPLOY_MODE=full vagrant up      - Deploy everything including UERANSIM
+#
+# After deployment, you can manually run phase 6 (UERANSIM) from ansible VM:
+#   vagrant ssh ansible
+#   cd ~/ansible-ro && ansible-playbook phases/06-ueransim-mec/playbook.yml -i inventory.ini
+#
 Vagrant.configure("2") do |config|
   config.ssh.insert_key = true
   config.vm.box_check_update = false
+  
+  # Deployment mode: "core_only" (default) or "full"
+  deploy_mode = ENV['DEPLOY_MODE'] || 'core_only'
 
   nodes = {
     "master"  => { cpu: 4, mem: 4096, ip: "192.168.56.10", box: "ubuntu/jammy64" },
@@ -10,16 +22,35 @@ Vagrant.configure("2") do |config|
     "ansible" => { cpu: 2, mem: 1024, ip: "192.168.56.13", box: "ubuntu/jammy64" }
   }
 
+  # Secondary network for physical RAN connection (worker only)
+  # This network is bridged to OVS for N2/N3 traffic isolation
+  ran_network = {
+    "worker" => { ip: "192.168.57.1", netmask: "255.255.255.0" }
+  }
+
   nodes.each do |name, spec|
     config.vm.define name, primary: (name == "ansible") do |m|
       m.vm.hostname = name
       m.vm.network "private_network", ip: spec[:ip]
       m.vm.box = spec[:box]
+      
+      # Add secondary RAN network interface for worker (for physical femtocell)
+      if ran_network.key?(name)
+        m.vm.network "private_network", 
+          ip: ran_network[name][:ip],
+          netmask: ran_network[name][:netmask],
+          virtualbox__intnet: "5g-ran-network"
+      end
 
       m.vm.provider "virtualbox" do |vb|
         vb.cpus   = spec[:cpu]
         vb.memory = spec[:mem]
         vb.name = "#{name}-5g-k8s-testbed"
+        
+        # Enable promiscuous mode on RAN interface for OVS bridging
+        if ran_network.key?(name)
+          vb.customize ["modifyvm", :id, "--nicpromisc3", "allow-all"]
+        end
       end
 
       if name != "ansible"
@@ -116,8 +147,18 @@ Vagrant.configure("2") do |config|
       for vm in master worker edge; do wait_ssh "$vm"; done
 
       echo "=== Running phased playbook (timed) ==="
+      echo "DEPLOY_MODE: #{deploy_mode}"
       pb_t0=$(date +%s)
-      ansible-playbook /home/vagrant/ansible-ro/phases/00-main-playbook.yml
+      
+      if [ "#{deploy_mode}" = "full" ]; then
+        echo "🚀 Full deployment mode: including UERANSIM (phase 6)"
+        ansible-playbook /home/vagrant/ansible-ro/phases/00-main-playbook.yml
+      else
+        echo "🔧 Core-only mode (default): deploying phases 1-5"
+        echo "   To add UERANSIM later, run from ansible VM:"
+        echo "   cd ~/ansible-ro && ansible-playbook phases/06-ueransim-mec/playbook.yml -i inventory.ini"
+        ansible-playbook /home/vagrant/ansible-ro/phases/00-main-playbook.yml --skip-tags phase6,ueransim,mec
+      fi
       pb_t1=$(date +%s)
 
       t1=$(date +%s)

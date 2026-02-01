@@ -1,0 +1,8 @@
+---
+# Handlers for kubeedge_edgecore role
+
+- name: Restart edgecore
+  systemd:
+    name: edgecore
+    state: restarted
+    daemon_reload: yes

@@ -21,14 +21,25 @@ suites:
     timeout: 600
   
   performance:
-    enabled: true
+    # DISABLED: Requires iperf3 installed in 5G containers
+    # To enable:
+    #   1. Add iperf3 to Open5GS container images or install at runtime
+    #   2. Ensure cluster has enough resources for load testing
+    #   3. Set enabled: true
+    enabled: false
     timeout: 1200
     duration: 60
     parallel_connections: 10
     packet_size: 1472
   
   resilience:
-    enabled: true
+    # DISABLED: Can overload the API server during recovery tests
+    # To enable:
+    #   1. Ensure cluster is stable and has adequate resources
+    #   2. Run after e2e/protocols pass consistently
+    #   3. May need to increase recovery_timeout for KubeEdge edge nodes
+    #   4. Set enabled: true
+    enabled: false
     timeout: 1800
     recovery_timeout: 120
     test_iterations: 3

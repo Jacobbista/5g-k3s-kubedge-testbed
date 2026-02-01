@@ -5,6 +5,8 @@ namespace_5g: "5g"
 namespace_mec: "mec"
 
 # Expected minimum number of running pods per component
+# NOTE: upf-edge is disabled (replicas: 0) due to CNI route conflict
+# See docs/known-issues/upf-edge-cni-route-conflict.md
 expected_pods:
   mongodb: 1
   nrf: 1
@@ -16,7 +18,7 @@ expected_pods:
   udr: 1
   nssf: 1
   ausf: 1
-  upf-edge: 1
+  upf-edge: 0  # Disabled - CNI route conflict on edge node
   upf-cloud: 1
 
 # Validation timeouts

@@ -1,10 +1,60 @@
 ---
 # UE DEPLOYMENT (StatefulSet per cell)
 # Deploy UEs driven by ueransim_topology
+#
+# gNB discovery: UE init container queries K8s API at startup to discover gNB IP.
+# Uses long-lived token from discovery-token Secret (created by infrastructure_setup).
+# This allows UE to auto-configure even if gNB restarts with a new IP.
 
 - name: Load topology vars
   include_vars:
     file: "{{ playbook_dir }}/vars/topology.yml"
+
+# Verify gNB is running before deploying UE (optional but recommended)
+- name: Verify gNB pods exist (per cell)
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Pod
+    namespace: "{{ namespace }}"
+    label_selectors: ["app={{ item.gnb.name }}"]
+    kubeconfig: "{{ kubeconfig_path }}"
+  register: gnb_pods_check
+  loop: "{{ ueransim_topology.cells }}"
+  loop_control:
+    label: "{{ item.gnb.name }}"
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Warn if gNB not found for any cell
+  debug:
+    msg: "WARNING: gNB {{ item.item.gnb.name }} not found. UE will wait for gNB at startup."
+  when: item.resources | length == 0
+  loop: "{{ gnb_pods_check.results }}"
+  loop_control:
+    label: "{{ item.item.gnb.name }}"
+  run_once: true
+
+- name: Get discovery token from ConfigMap
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: ConfigMap
+    namespace: "{{ namespace }}"
+    name: discovery-token
+    kubeconfig: "{{ kubeconfig_path }}"
+  register: discovery_token_cm
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Fail if discovery-token ConfigMap not found
+  fail:
+    msg: "discovery-token ConfigMap not found in namespace {{ namespace }}. Run infrastructure_setup role first."
+  when: discovery_token_cm.resources | length == 0
+  run_once: true
+
+- name: Extract discovery token
+  set_fact:
+    discovery_token: "{{ discovery_token_cm.resources[0].data.token }}"
+  run_once: true
 
 - name: Deploy UE StatefulSets per cell
   kubernetes.core.k8s:
@@ -22,8 +72,8 @@
     label_selectors: ["app=ue", "cell-id={{ item.id }}"]
     kubeconfig: "{{ kubeconfig_path }}"
   register: ue_pods
-  retries: 30
-  delay: 10
+  retries: 12
+  delay: 5
   until: >-
     (ue_pods.resources | length) >= (item.ues | length)
     and (ue_pods.resources | selectattr('status.phase','equalto','Running') | list | length) >= (item.ues | length)

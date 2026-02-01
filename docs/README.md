@@ -1,73 +1,100 @@
-# Documentation Index
+# Documentation
 
-## Getting Started
+## Quick Links
 
-- [Main README](../README.md) - Project overview and quick start
-- [Handbook](handbook.md) - Complete operational handbook
+- [Getting Started](getting-started.md) - Deploy the testbed in 30 minutes
+- [Architecture Overview](architecture/overview.md) - System design and components
+- [Troubleshooting](operations/troubleshooting.md) - Common issues and solutions
 
-## Phase Documentation
-
-### Phase 1: Infrastructure Setup
-
-- [Phase 1 README](../ansible/phases/01-infrastructure/README.md) - System packages, OVS, network setup
-
-### Phase 2: Kubernetes Cluster
-
-- [Phase 2 README](../ansible/phases/02-kubernetes/README.md) - K3s deployment (master + worker)
-
-### Phase 3: KubeEdge Integration
-
-- [Phase 3 README](../ansible/phases/03-kubeedge/README.md) - CloudCore and EdgeCore setup
-
-### Phase 4: Overlay Network
-
-- [Phase 4 README](../ansible/phases/04-overlay-network/README.md) - Multus, OVS, VXLAN tunnels
-- [Multus Meta-Plugin Architecture](multus-meta-plugin-architecture.md) - CNI configuration details
-
-### Phase 5: 5G Core Network
-
-- [Phase 5 README](../ansible/phases/05-5g-core/README.md) - Open5GS deployment
-- [NF Architecture](../ansible/phases/05-5g-core/NF_ARCHITECTURE.md) - Network Functions deep dive
-
-### Phase 6: UERANSIM & MEC
-
-- [Phase 6 README](../ansible/phases/06-ueransim-mec/README.md) - gNB, UE, MEC deployment
-- [Phase 6 Refactoring](../ansible/phases/06-ueransim-mec/REFACTORING.md) - Implementation details
-- [Phase 6 Implementation Guide](phase6-implementation-guide.md) - Deployment procedures
-- [Phase 6 Best Practices](phase6-best-practices.md) - Design patterns and recommendations
-- [gNB Endpoints Sync](../ansible/phases/06-ueransim-mec/roles/endpoints_sync/README.md) - DNS resolution for Multus IPs
-
-## Operational Guides
-
-### Runbooks
-
-- [Runbooks Index](runbooks/README.md) - Diagnostic procedures overview
-- [GTP-U Path Diagnostics](runbooks/gtpu-path.md) - User plane troubleshooting
-- [Multus NAD and IPAM](runbooks/multus-nad-ipam.md) - Network attachment diagnostics
-- [NGAP Diagnostics](runbooks/ngap-diagnostics.md) - Control plane signaling
-- [OVS VXLAN Health](runbooks/ovs-vxlan-health.md) - Overlay network diagnostics
-- [PFCP Diagnostics](runbooks/pfcp-diagnostics.md) - SMF-UPF interface troubleshooting
-
-### Known Issues
-
-- [UPF Edge CNI Route Conflict](known-issues/upf-edge-cni-route-conflict.md) - UPF routing issues on edge node
-
-## Testing
-
-- [Test Framework](../tests/README.md) - Automated test suite
-- [Test Configuration](../tests/test_config.yaml) - Test parameters
+---
 
 ## Architecture
 
-- [Multus Meta-Plugin Architecture](multus-meta-plugin-architecture.md) - CNI configuration deep dive
-- [5G Network Functions Architecture](../ansible/phases/05-5g-core/NF_ARCHITECTURE.md) - NF theory and implementation
+Understand how the system is built.
 
-## Contributing
+| Document | Description |
+|----------|-------------|
+| [Overview](architecture/overview.md) | System components, node roles, technology stack |
+| [Network Topology](architecture/network-topology.md) | OVS bridges, VXLAN tunnels, Multus CNI |
+| [5G Interfaces](architecture/5g-interfaces.md) | N1, N2, N3, N4, N6 reference points |
 
-When adding documentation:
+---
 
-1. Use clear, concise English
-2. Include code examples where relevant
-3. Add cross-references to related docs
-4. Update this index
-5. Follow existing structure (README per phase, runbooks for operations)
+## Deployment
+
+Setup and configuration guides.
+
+| Document | Description |
+|----------|-------------|
+| [Getting Started](getting-started.md) | Quick deployment guide |
+| [Deployment Phases](deployment/phases.md) | Phase 1-6 detailed breakdown |
+| [Physical RAN](deployment/physical-ran.md) | Connect real femtocell instead of UERANSIM |
+
+---
+
+## Operations
+
+Day-to-day management and diagnostics.
+
+| Document | Description |
+|----------|-------------|
+| [Troubleshooting](operations/troubleshooting.md) | Common issues and solutions |
+| [Handbook](operations/handbook.md) | Complete operational reference |
+
+### Runbooks
+
+Detailed diagnostic procedures for specific subsystems.
+
+| Runbook | Description |
+|---------|-------------|
+| [GTP-U Path](runbooks/gtpu-path.md) | N3 user plane diagnostics |
+| [NGAP Diagnostics](runbooks/ngap-diagnostics.md) | N2 control plane signaling |
+| [PFCP Diagnostics](runbooks/pfcp-diagnostics.md) | N4 SMF-UPF interface |
+| [OVS VXLAN Health](runbooks/ovs-vxlan-health.md) | Overlay network diagnostics |
+| [Multus NAD IPAM](runbooks/multus-nad-ipam.md) | Network attachment issues |
+
+---
+
+## Development
+
+Contributing and testing.
+
+| Document | Description |
+|----------|-------------|
+| [Testing Guide](development/testing.md) | Run and write tests |
+| [Contributing](development/contributing.md) | How to contribute |
+
+---
+
+## Known Issues
+
+Platform-specific limitations and workarounds.
+
+| Issue | Description |
+|-------|-------------|
+| [KubeEdge Edge Discovery](known-issues/kubeedge-edge-discovery.md) | Service discovery on edge nodes |
+| [KubeEdge Multus Env](known-issues/kubeedge-multus-env-injection.md) | Environment variable injection |
+| [UPF Edge CNI Route](known-issues/upf-edge-cni-route-conflict.md) | Routing conflicts |
+
+---
+
+## Additional Resources
+
+### Phase-specific Documentation
+
+Each deployment phase has its own README:
+
+- [Phase 1: Infrastructure](../ansible/phases/01-infrastructure/README.md)
+- [Phase 2: Kubernetes](../ansible/phases/02-kubernetes/README.md)
+- [Phase 3: KubeEdge](../ansible/phases/03-kubeedge/README.md)
+- [Phase 4: Overlay Network](../ansible/phases/04-overlay-network/README.md)
+- [Phase 5: 5G Core](../ansible/phases/05-5g-core/README.md)
+- [Phase 6: UERANSIM](../ansible/phases/06-ueransim-mec/README.md)
+
+### 5G Core Deep Dive
+
+- [NF Architecture](../ansible/phases/05-5g-core/NF_ARCHITECTURE.md) - Network Functions theory and implementation
+
+### Test Suite
+
+- [Test Framework](../tests/README.md) - Automated testing documentation

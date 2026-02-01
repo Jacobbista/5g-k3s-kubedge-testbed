@@ -1,8 +1,10 @@
 # utils/k8s_client.py
 from __future__ import annotations
 from typing import Any, Dict, List, Optional, Tuple
+from dataclasses import dataclass
 import base64
 import os
+import subprocess
 
 from kubernetes import client, config
 from kubernetes.stream import stream
@@ -11,6 +13,17 @@ from kubernetes.client import ApiException
 
 class K8sClientError(Exception):
     pass
+
+
+@dataclass
+class ExecResult:
+    """Result of exec_in_pod, compatible with subprocess.CompletedProcess"""
+    stdout: str
+    stderr: str = ""
+    returncode: int = 0
+    
+    def __bool__(self):
+        return self.returncode == 0
 
 
 class K8sClient:
@@ -121,15 +134,15 @@ class K8sClient:
         tty: bool = False,
         timeout: int = 60,
         retry_if_not_found: bool = True,
-    ) -> str:
+    ) -> ExecResult:
         """
         Executes a command inside a pod.
         - If `container` is None, Kubernetes may still require it when multiple containers exist.
         - On 'container not found' errors, it retries automatically with the first non-init container.
-        Returns stdout/stderr combined as a single string.
+        Returns ExecResult with stdout, stderr, returncode.
         """
         try:
-            return stream(
+            output = stream(
                 self.core.connect_get_namespaced_pod_exec,
                 name=pod_name,
                 namespace=namespace,
@@ -141,6 +154,7 @@ class K8sClient:
                 tty=tty,
                 _request_timeout=timeout,
             )
+            return ExecResult(stdout=output, stderr="", returncode=0)
         except ApiException as e:
             msg = getattr(e, "body", "") or str(e)
             needs_retry = retry_if_not_found and ("container not found" in msg.lower())
@@ -149,7 +163,7 @@ class K8sClient:
                 fallback = self._pick_default_container(pod)
                 if fallback and fallback != container:
                     try:
-                        return stream(
+                        output = stream(
                             self.core.connect_get_namespaced_pod_exec,
                             name=pod_name,
                             namespace=namespace,
@@ -161,10 +175,38 @@ class K8sClient:
                             tty=tty,
                             _request_timeout=timeout,
                         )
+                        return ExecResult(stdout=output, stderr="", returncode=0)
                     except ApiException as e2:
-                        raise K8sClientError(
-                            f"Exec retry failed on container '{fallback}': {getattr(e2, 'body', e2)}"
-                        )
-            raise K8sClientError(f"Exec in pod failed: {msg}")
+                        return ExecResult(stdout="", stderr=str(e2), returncode=1)
+            return ExecResult(stdout="", stderr=msg, returncode=1)
         except Exception as e:
-            raise K8sClientError(f"Exec in pod error: {e}")
+            return ExecResult(stdout="", stderr=str(e), returncode=1)
+
+    # ---------- kubectl-like commands ----------
+
+    def run_command(self, args: List[str], namespace: Optional[str] = None) -> ExecResult:
+        """
+        Run kubectl command via subprocess.
+        Used for operations like delete, rollout restart, etc.
+        """
+        kubeconfig = os.environ.get("KUBECONFIG", "")
+        cmd = ["kubectl"]
+        if kubeconfig:
+            cmd.extend(["--kubeconfig", kubeconfig])
+        if namespace:
+            cmd.extend(["-n", namespace])
+        cmd.extend(args)
+        
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+            return ExecResult(
+                stdout=result.stdout,
+                stderr=result.stderr,
+                returncode=result.returncode
+            )
+        except subprocess.TimeoutExpired:
+            return ExecResult(stdout="", stderr="Command timed out", returncode=124)
+        except FileNotFoundError:
+            return ExecResult(stdout="", stderr="kubectl not found", returncode=127)
+        except Exception as e:
+            return ExecResult(stdout="", stderr=str(e), returncode=1)

@@ -1,0 +1,47 @@
+{#
+  Static Multus conflist for edge node (KubeEdge workaround)
+  
+  KubeEdge EdgeCore injects empty KUBERNETES_SERVICE_HOST/PORT env vars
+  which override any values set in the pod spec. This breaks thin_entrypoint's
+  kubeconfig generation (produces "server: https://[]:").
+  
+  Solution: Use static conflist with --multus-conf-file=/path instead of auto mode.
+  The kubeconfig path is outside /host/etc/cni/net.d to prevent thin_entrypoint
+  from attempting to regenerate it.
+  See: docs/known-issues/kubeedge-multus-env-injection.md
+#}
+{
+  "cniVersion": "1.0.0",
+  "name": "multus-cni-network",
+  "plugins": [{
+    "type": "multus",
+    "capabilities": {"portMappings": true},
+    "logLevel": "verbose",
+    "logFile": "/var/log/multus.log",
+    "kubeconfig": "/var/lib/multus/multus.kubeconfig",
+    "delegates": [
+      {
+        "cniVersion": "1.0.0",
+        "name": "edge-cni",
+        "plugins": [
+          {
+            "type": "bridge",
+            "bridge": "cni0",
+            "isGateway": true,
+            "isDefaultGateway": false,
+            "ipMasq": true,
+            "hairpinMode": true,
+            "ipam": {
+              "type": "host-local",
+              "subnet": "{{ edge_pod_cidr | default('10.244.0.0/24') }}"
+            }
+          },
+          {
+            "type": "portmap",
+            "capabilities": {"portMappings": true}
+          }
+        ]
+      }
+    ]
+  }]
+}

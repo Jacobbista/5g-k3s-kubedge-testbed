@@ -187,6 +187,14 @@
   delegate_to: "{{ groups['workers'][0] }}"
   run_once: true
 
+- name: Ensure /etc/cni/net.d exists on worker (for compatibility symlink)
+  file:
+    path: "/etc/cni/net.d"
+    state: directory
+    mode: "0755"
+  delegate_to: "{{ groups['workers'][0] }}"
+  run_once: true
+
 - name: Create symlink for Whereabouts config on worker (k3s compatibility)
   file:
     src: "{{ cni_conf_dir_worker }}/whereabouts.d"
@@ -380,11 +388,20 @@
   no_log: true
 
 # Create kubeconfig on edge with inline variables (no hostvars dependency)
+# Path is /var/lib/multus/ to keep it outside CNI config dir and prevent
+# thin_entrypoint from overwriting it (KubeEdge workaround)
+- name: Ensure Multus kubeconfig directory on edge
+  file:
+    path: /var/lib/multus
+    state: directory
+    mode: "0755"
+  delegate_to: "{{ groups['edges'][0] }}"
+  run_once: true
+
 - name: Create Multus kubeconfig on edge
   copy:
-    dest: "{{ cni_conf_dir_edge }}/multus.d/multus.kubeconfig"
+    dest: /var/lib/multus/multus.kubeconfig
     mode: "0644"
-    backup: true
     content: |
       apiVersion: v1
       kind: Config
@@ -409,7 +426,7 @@
 
 # Sanity check: verify server line is correct on edge
 - name: Sanity check kubeconfig server on edge
-  shell: "grep 'server:' {{ cni_conf_dir_edge }}/multus.d/multus.kubeconfig | awk '{print $2}'"
+  shell: "grep 'server:' /var/lib/multus/multus.kubeconfig | awk '{print $2}'"
   register: _edge_server_check
   changed_when: false
   delegate_to: "{{ groups['edges'][0] }}"
@@ -421,18 +438,18 @@
     fail_msg: "Edge kubeconfig server={{ _edge_server_check.stdout }} != expected={{ _multus_k8s_server }}"
   run_once: true
 
-# Make kubeconfig immutable to prevent thin entrypoint from overwriting it
-- name: Make Multus kubeconfig immutable on worker
-  shell: "chattr +i {{ cni_conf_dir_worker }}/multus.d/multus.kubeconfig"
-  delegate_to: "{{ groups['workers'][0] }}"
-  run_once: true
-  failed_when: false
+# ==============================================================
+# STATIC MULTUS CONFIG FOR EDGE (KubeEdge workaround)
+# See: docs/known-issues/kubeedge-multus-env-injection.md
+# ==============================================================
 
-- name: Make Multus kubeconfig immutable on edge
-  shell: "chattr +i {{ cni_conf_dir_edge }}/multus.d/multus.kubeconfig"
+- name: Create static Multus conflist on edge (KubeEdge workaround)
+  template:
+    src: 00-multus-edge.conflist.j2
+    dest: "{{ cni_conf_dir_edge }}/00-multus.conflist"
+    mode: "0644"
   delegate_to: "{{ groups['edges'][0] }}"
   run_once: true
-  failed_when: false
 
 # ==============================================================
 # DEPLOY MULTUS AS META-PLUGIN (NO PRIMARY CNI CONFLIST)
@@ -522,7 +539,10 @@
   delegate_to: "{{ groups['masters'][0] }}"
   run_once: true
 
-- name: Deploy Multus DaemonSet for edge (meta-plugin mode)
+# Edge DaemonSet uses STATIC config (not auto) to work around KubeEdge env var issue
+# KubeEdge injects empty KUBERNETES_SERVICE_HOST/PORT which breaks kubeconfig generation
+# See: docs/known-issues/kubeedge-multus-env-injection.md
+- name: Deploy Multus DaemonSet for edge (static config mode - KubeEdge workaround)
   kubernetes.core.k8s:
     state: present
     kubeconfig: "/home/vagrant/kubeconfig"
@@ -563,10 +583,10 @@
                 image: ghcr.io/k8snetworkplumbingwg/multus-cni:v{{ multus_version }}
                 command: ["/thin_entrypoint"]
                 args:
-                  - "--multus-conf-file=auto"
+                  # Use static conflist instead of auto - this SKIPS kubeconfig generation
+                  # (--multus-kubeconfig-file-host is only used with auto mode)
+                  - "--multus-conf-file=/host/etc/cni/net.d/00-multus.conflist"
                   - "--multus-log-level=verbose"
-                  - "--multus-kubeconfig-file-host={{ cni_conf_dir_edge }}/multus.d/multus.kubeconfig"
-                  - "--cni-version=1.0.0"
                   - "--multus-log-to-stderr=true"
                   - "--multus-log-file=/var/log/multus.log"
                   - "--skip-multus-binary-copy=false"
@@ -586,15 +606,11 @@
                     mountPath: /host/etc/cni/net.d
                   - name: cnibin
                     mountPath: /host/opt/cni/bin
-                env:
-                  - name: KUBERNETES_NODE_NAME
-                    valueFrom:
-                      fieldRef:
-                        fieldPath: spec.nodeName
-                  - name: KUBERNETES_SERVICE_HOST
-                    value: "{{ hostvars[groups['masters'][0]]['ansible_host'] }}"
-                  - name: KUBERNETES_SERVICE_PORT
-                    value: "6443"
+                  # Mount kubeconfig from outside CNI dir to prevent thin_entrypoint overwrite
+                  - name: multus-kubeconfig
+                    mountPath: /var/lib/multus
+                    readOnly: true
+                # No KUBERNETES_SERVICE_HOST/PORT env vars needed - we use static config
             volumes:
               - name: cni
                 hostPath:
@@ -602,6 +618,10 @@
               - name: cnibin
                 hostPath:
                   path: "{{ cni_bin_dir_edge }}"
+              - name: multus-kubeconfig
+                hostPath:
+                  path: /var/lib/multus
+                  type: Directory
   delegate_to: "{{ groups['masters'][0] }}"
   run_once: true
 
@@ -618,6 +638,18 @@
   retries: 24
   delay: 5
   delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+# k3s looks for CNI plugins in /var/lib/rancher/k3s/data/cni/ (without bin/)
+# Multus DaemonSet copies binary to /var/lib/rancher/k3s/data/cni/bin/multus
+# Create symlink so k3s can find it (same pattern as ovs, whereabouts, static)
+- name: Create k3s symlink for Multus binary (worker)
+  file:
+    src: "/var/lib/rancher/k3s/data/cni/bin/multus"
+    dest: "/var/lib/rancher/k3s/data/cni/multus"
+    state: link
+    force: yes
+  delegate_to: "{{ groups['workers'][0] }}"
   run_once: true
 
 - name: Wait for Multus edge DS

@@ -9,7 +9,13 @@
 
 - name: Build per-cell N2 networks for AMF
   set_fact:
-    amf_cell_n2_networks: "{{ amf_cell_n2_networks | default([]) + [{'name': 'n2-cell-' ~ item.id}] }}"
+    # Dynamic IP from Whereabouts - gNB discovers AMF IP via init container
+    # No static IPs - fully cloud-native and scalable
+    amf_cell_n2_networks: >-
+      {{ amf_cell_n2_networks | default([]) + [{
+        'name': 'n2-cell-' ~ item.id,
+        'interface': 'n2c' ~ item.id
+      }] }}
   loop: "{{ ueransim_topology.cells }}"
   loop_control:
     label: "cell-{{ item.id }}"

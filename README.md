@@ -1,180 +1,116 @@
-# 5G K3s KubeEdge Testbed
+# 5G KubeEdge Testbed
 
-A comprehensive 5G testbed for research and testing, featuring cloud-edge distribution with K3s, KubeEdge, and Open5GS. This testbed provides a complete 5G infrastructure simulation suitable for edge computing research, MEC applications, and network function testing.
+A production-ready 5G testbed for research and development, featuring cloud-edge distribution with Kubernetes, KubeEdge, and Open5GS.
 
-## What you get
+[![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 
-- **K3s cluster** (1 master/control-plane, 1 worker, 1 edge)
-- **KubeEdge** (CloudCore on worker, EdgeCore on edge) for cloud↔edge orchestration
-- **Overlay data-plane** with OVS bridges and VXLAN tunnels between worker↔edge
-- **Multus CNI** with NetworkAttachmentDefinitions for 5G interfaces (N1/N2/N3/N4/N6e/N6c)
-- **Open5GS-based 5G Core** (NRF/AMF/SMF/UPF/UDM/UDR/PCF/BSF/NSSF/AUSF)
-- **UERANSIM** (gNB/UE simulator) and MEC applications
-- **Complete automation** with Vagrant + Ansible for reproducible deployments
+## Overview
 
-## Topology (at a glance)
+This testbed provides a complete 5G network infrastructure for:
+
+- **Edge Computing Research** - Cloud-edge workload distribution with KubeEdge
+- **5G Protocol Testing** - Full Open5GS core with NGAP, GTP-U, PFCP interfaces
+- **MEC Applications** - Multi-access Edge Computing scenarios
+- **Network Simulation** - UERANSIM gNB/UE or physical femtocell integration
+
+## Architecture
 
 ```
-┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
-│   Master Node   │    │   Worker Node   │    │    Edge Node    │
-│  (control-plane)│    │ (datacenter)    │    │     (edge)      │
-│ • K3s Server    │    │ • K3s Agent     │    │ • K3s Agent     │
-│                 │    │ • CloudCore     │    │ • EdgeCore      │
-│                 │    │ • OVS + Multus  │    │ • OVS + Multus  │
-└─────────────────┘    └─────────────────┘    └─────────────────┘
-                 VXLAN tunnels (N1/N2/N3/N4/N6) between worker and edge
++------------------+     +------------------+     +------------------+
+|   MASTER NODE    |     |   WORKER NODE    |     |    EDGE NODE     |
+|                  |     |                  |     |                  |
+|  K3s Server      |     |  5G Core         |     |  EdgeCore        |
+|  CloudCore       |     |  (Open5GS)       |     |  gNB + UEs       |
+|                  |     |  MongoDB         |     |  (UERANSIM)      |
++------------------+     +------------------+     +------------------+
+                               |                        |
+                               +--- VXLAN Tunnels ------+
+                                   (N2, N3, N4, N6)
 ```
 
-## Prerequisites
+## Quick Start
 
-- Vagrant ≥ 2.3.0
-- VirtualBox ≥ 6.1.0
-- Host OS: Linux/macOS/Windows with virtualization enabled
+### Prerequisites
 
-## Quick start
+- Vagrant >= 2.3.0
+- VirtualBox >= 6.1.0
+- 16GB RAM recommended
+
+### Deploy
 
 ```bash
-git clone <repository-url>
-cd 5g-k8s-testbed-vagrant-ansible-fullautodeploy
+git clone https://github.com/Jacobbista/5g-k3s-kubedge-testbed.git
+cd 5g-k3s-kubedge-testbed
+
+# Deploy 5G Core only (default)
 vagrant up
+
+# Deploy full stack with UERANSIM
+DEPLOY_MODE=full vagrant up
 ```
 
-Vagrant provisions 4 VMs: `master`, `worker`, `edge`, `ansible`. The Ansible VM drives all phases via the main playbook.
-
-## Phased deployment
-
-Phases are orchestrated by `ansible/phases/00-main-playbook.yml`:
-
-1. Infrastructure
-2. Kubernetes (K3s)
-3. KubeEdge
-4. Overlay Network (OVS + Multus + NADs)
-5. 5G Core (Open5GS)
-6. UERANSIM & MEC
-
-Run everything:
+### Verify
 
 ```bash
-vagrant up  # triggers phases/00-main-playbook.yml on the Ansible VM
+vagrant ssh master
+kubectl get nodes
+kubectl get pods -n 5g
 ```
 
-Run specific phases:
+## Features
 
-```bash
-vagrant ssh ansible
-cd /home/vagrant/ansible-ro
-ansible-playbook phases/00-main-playbook.yml --tags phase4,phase5 -i inventory.ini
-```
+| Component | Technology | Purpose |
+|-----------|------------|---------|
+| Kubernetes | K3s | Container orchestration |
+| Edge Computing | KubeEdge | Cloud-edge communication |
+| 5G Core | Open5GS | AMF, SMF, UPF, NRF, etc. |
+| RAN Simulation | UERANSIM | gNB and UE simulators |
+| Networking | OVS + VXLAN | Isolated overlay networks |
+| CNI | Multus | Multi-homed pods |
 
-> **Note:**  
-> When manually running phases with `ansible-playbook`, be sure to specify the inventory file (e.g., `-i inventory.ini`) from the `ansible-ro` directory.
+## 5G Interfaces
 
-## 5G Network Interfaces
-
-The testbed implements the following 5G interfaces using Multus CNI:
-
-| Interface | Network    | IP Range      | Purpose              | Protocol       |
-| --------- | ---------- | ------------- | -------------------- | -------------- |
-| **N1**    | n1-net     | 10.201.0.0/24 | UE ↔ AMF (NAS)       | NAS over SCTP  |
-| **N2**    | n2-net     | 10.202.0.0/24 | gNB ↔ AMF (NGAP)     | NGAP over SCTP |
-| **N3**    | n3-net     | 10.203.0.0/24 | gNB/UE ↔ UPF (GTP-U) | GTP-U over UDP |
-| **N4**    | n4-net     | 10.204.0.0/24 | SMF ↔ UPF (PFCP)     | PFCP over UDP  |
-| **N6e**   | n6-mec-net | 10.206.0.0/24 | UPF-edge ↔ MEC       | IP routing     |
-| **N6c**   | n6-cld-net | 10.207.0.0/24 | UPF-cloud ↔ DN       | IP routing     |
-
-**Static IP assignments:**
-
-- AMF: 10.201.0.100 (N1), 10.202.0.100 (N2)
-- SMF: 10.204.0.100 (N4)
-- UPF-edge: 10.203.0.100 (N3), 10.204.0.101 (N4)
-- UPF-cloud: 10.203.0.101 (N3), 10.204.0.102 (N4)
-
-VXLAN tunnels connect worker↔edge with keys: N1=1, N2=2, N3=3, N4=4, N6e=6, N6c=7.
-
-## Validate
-
-See detailed validation steps in `docs/handbook.md`. Quick checks:
-
-```bash
-# Nodes and system pods
-kubectl get nodes -o wide
-kubectl get pods -A
-
-# Multus NADs
-kubectl get network-attachment-definitions -A
-
-# 5G core
-kubectl -n 5g get deploy,svc
-```
-
-## Research & Testing Focus
-
-This testbed is designed for **5G research and testing** with emphasis on:
-
-- **Edge Computing**: Cloud↔edge distribution with KubeEdge
-- **MEC Applications**: Multi-access Edge Computing scenarios
-- **Network Function Testing**: Complete 5G Core with realistic interfaces
-- **Migration Scenarios**: Dynamic UPF/MEC movement between cloud and edge
-- **Performance Analysis**: Ready for monitoring and benchmark tools
-- **Network Impairments**: Bandwidth limiting, latency injection, packet loss simulation via OVS/TC for realistic link conditions
+| Interface | Network | Protocol | Purpose |
+|-----------|---------|----------|---------|
+| N1 | 10.201.0.0/24 | NAS/SCTP | UE - AMF signaling |
+| N2 | 10.202.0.0/24 | NGAP/SCTP | gNB - AMF control |
+| N3 | 10.203.0.0/24 | GTP-U/UDP | gNB - UPF user plane |
+| N4 | 10.204.0.0/24 | PFCP/UDP | SMF - UPF control |
 
 ## Documentation
 
-- **Complete handbook**: `docs/handbook.md` - Comprehensive guide with all procedures
-- **Diagnostic runbooks**: `docs/runbooks/` - Focused troubleshooting procedures
-- **Ansible phases**: `ansible/phases/*` - Automated deployment scripts
+| Topic | Link |
+|-------|------|
+| Getting Started | [docs/getting-started.md](docs/getting-started.md) |
+| Architecture | [docs/architecture/overview.md](docs/architecture/overview.md) |
+| Network Topology | [docs/architecture/network-topology.md](docs/architecture/network-topology.md) |
+| Deployment Phases | [docs/deployment/phases.md](docs/deployment/phases.md) |
+| Physical RAN | [docs/deployment/physical-ran.md](docs/deployment/physical-ran.md) |
+| Troubleshooting | [docs/operations/troubleshooting.md](docs/operations/troubleshooting.md) |
+| Testing | [docs/development/testing.md](docs/development/testing.md) |
 
-## Testing & Validation
-
-Use the included test script to validate the phased structure:
-
-```bash
-# Validate complete structure
-./test-phases.sh validate
-
-# List all available phases
-./test-phases.sh list
-
-# Inspect a specific phase
-./test-phases.sh 01-infrastructure
-./test-phases.sh 02-kubernetes
-
-# Show help
-./test-phases.sh help
-```
-
-## Troubleshooting
+## Testing
 
 ```bash
-# K3s
-journalctl -u k3s -f
-journalctl -u k3s-agent -f
-
-# KubeEdge
-kubectl -n kubeedge get pods
-kubectl -n kubeedge logs -l app=cloudcore --tail=100
-
-# OVS state
-sudo ovs-vsctl show
+cd tests
+make e2e        # End-to-end tests
+make protocols  # Protocol validation
+make ran        # Physical RAN tests
 ```
 
-> **Note:** The commands are just examples. You may need to adapt paths and commands to your specific setup and environment. Generally all the cluster related commands are meant to be runned in the **master** node.
+## Use Cases
 
-## Future Enhancements
-
-- [ ] **Monitoring Stack**: Prometheus/Grafana integration for metrics collection
-- [ ] **Benchmark Tools**: Automated performance testing and analysis
-- [ ] **Test Suite**: Comprehensive testing framework for different scenarios
-- [ ] **Metrics Dashboard**: Real-time visualization of 5G network performance
+- **Academic Research**: 5G network behavior, edge computing algorithms
+- **Development**: Test applications against real 5G interfaces
+- **Training**: Learn 5G architecture hands-on
+- **Integration Testing**: Validate physical RAN equipment
 
 ## License
 
-MIT License. See `LICENSE`.
+Copyright 2024-2026 Jacopo Bennati
+
+Licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE) for details.
 
 ## Acknowledgements
 
-- K3s (`https://k3s.io`)
-- KubeEdge (`https://kubeedge.io`)
-- Multus CNI (`https://github.com/k8snetworkplumbingwg/multus-cni`)
-- Open5GS (`https://open5gs.org`)
-- UERANSIM (`https://github.com/aligungr/UERANSIM`)
+Built with [K3s](https://k3s.io), [KubeEdge](https://kubeedge.io), [Open5GS](https://open5gs.org), [UERANSIM](https://github.com/aligungr/UERANSIM), and [Multus CNI](https://github.com/k8snetworkplumbingwg/multus-cni).

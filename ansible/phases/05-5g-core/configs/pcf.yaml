@@ -7,9 +7,11 @@ pcf:
     server:
       - address: 0.0.0.0
         port: 7777
+        advertise: pcf
     client:
       nrf:
         - uri: http://nrf:7777
+    no_tls: true
   metrics:
     server:
       - address: 0.0.0.0

@@ -9,7 +9,10 @@
   set_fact:
     cell_count: "{{ ueransim_topology.cells | length | int }}"
 
-- name: Create N2 NAD per cell
+# Per-cell NADs use Whereabouts IPAM for dynamic IP allocation.
+# AMF and gNB discover each other's IPs via init containers (cloud-native approach).
+# This supports horizontal scaling and pod restarts without manual IP management.
+- name: Create N2 NAD per cell (Whereabouts IPAM)
   kubernetes.core.k8s:
     state: present
     kubeconfig: "{{ kubeconfig_path }}"
@@ -40,7 +43,7 @@
   delegate_to: "{{ groups['masters'][0] }}"
   run_once: true
 
-- name: Create N3 NAD per cell
+- name: Create N3 NAD per cell (Whereabouts IPAM)
   kubernetes.core.k8s:
     state: present
     kubeconfig: "{{ kubeconfig_path }}"

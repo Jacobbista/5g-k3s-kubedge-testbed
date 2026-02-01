@@ -62,7 +62,7 @@ kubectl -n kube-system get ds | grep -E "ds-net-setup|kube-multus-ds" && echo "D
 
 ## Related Documentation
 
-- **Main Handbook**: [`../handbook.md`](../handbook.md) - Complete system documentation
+- **Main Handbook**: [`../operations/handbook.md`](../operations/handbook.md) - Complete system documentation
 - **Root README**: [`../README.md`](../README.md) - Quick start and overview
 - **Context**: [`../CONTEXT.md`](../CONTEXT.md) - High-level architecture overview
 

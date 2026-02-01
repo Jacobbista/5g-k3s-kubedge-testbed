@@ -7,7 +7,8 @@ namespace: "5g"
 cell_n2_subnet_prefix: "10.202"
 cell_n3_subnet_prefix: "10.203"
 subnet_mask: "24"
-ip_range_start: "10"
+# Start dynamic range at .20 to reserve .10-.19 for static IPs (AMF uses .10)
+ip_range_start: "20"
 ip_range_end: "250"
 
 # OVS bridge name prefixes

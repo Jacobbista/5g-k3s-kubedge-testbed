@@ -1,27 +1,53 @@
 ---
 # GNB DEPLOYMENT (Deployment per cell)
 # Deploy gNBs driven by ueransim_topology
+#
+# AMF discovery: gNB init container queries K8s API at startup to discover AMF IP.
+# Uses long-lived token from discovery-token Secret (created by infrastructure_setup).
+# This allows gNB to auto-configure even if AMF restarts with a new IP.
 
 - name: Load topology vars
   include_vars:
     file: "{{ playbook_dir }}/vars/topology.yml"
 
-- name: Create gNB ConfigMaps per cell
-  kubernetes.core.k8s:
-    state: present
+# Verify AMF is running before deploying gNB (optional but recommended)
+- name: Verify AMF pod exists
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Pod
+    namespace: "{{ namespace }}"
+    label_selectors: ["app=amf"]
     kubeconfig: "{{ kubeconfig_path }}"
-    definition:
-      apiVersion: v1
-      kind: ConfigMap
-      metadata:
-        name: "{{ item.gnb.name }}-config"
-        namespace: "{{ namespace }}"
-      data:
-        gnb.yaml: "{{ lookup('template', 'gnb-config.yaml.j2', template_vars={'cell': item}) }}"
-  loop: "{{ ueransim_topology.cells }}"
-  loop_control:
-    label: "{{ item.gnb.name }}"
+  register: amf_pods_check
   delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Warn if AMF not found (gNB will wait at startup)
+  debug:
+    msg: "WARNING: AMF pod not found. gNB will wait for AMF at startup."
+  when: amf_pods_check.resources | length == 0
+  run_once: true
+
+- name: Get discovery token from ConfigMap
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: ConfigMap
+    namespace: "{{ namespace }}"
+    name: discovery-token
+    kubeconfig: "{{ kubeconfig_path }}"
+  register: discovery_token_cm
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Fail if discovery-token ConfigMap not found
+  fail:
+    msg: "discovery-token ConfigMap not found in namespace {{ namespace }}. Run infrastructure_setup role first."
+  when: discovery_token_cm.resources | length == 0
+  run_once: true
+
+- name: Extract discovery token
+  set_fact:
+    discovery_token: "{{ discovery_token_cm.resources[0].data.token }}"
   run_once: true
 
 - name: Deploy gNB Services + Deployments
@@ -40,8 +66,8 @@
     label_selectors: ["app={{ item.gnb.name }}"]
     kubeconfig: "{{ kubeconfig_path }}"
   register: gnb_pods
-  retries: 30
-  delay: 10
+  retries: 12
+  delay: 5
   until: >-
     gnb_pods.resources | length > 0 and
     (gnb_pods.resources | selectattr('status.phase','equalto','Running') | list | length) >= 1

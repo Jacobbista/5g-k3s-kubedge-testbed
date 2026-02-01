@@ -166,14 +166,21 @@ class E2ETestSuite:
             self.logger.success(f"Found {len(running_multus)} running Multus pods")
             
             nads = self.kubectl.get_network_attachments()
-            expected_nads = ["n1-net", "n2-net", "n3-net", "n4-net", "n6-mec-net", "n6-cld-net"]
+            # Core NADs required for 5G Core
+            required_nads = ["n1-net", "n2-net", "n3-net", "n4-net"]
+            # Optional NADs for MEC
+            optional_nads = ["n6-mec-net", "n6-cld-net"]
             
             nad_names = [nad["metadata"]["name"] for nad in nads]
-            missing_nads = [nad for nad in expected_nads if nad not in nad_names]
+            missing_required = [nad for nad in required_nads if nad not in nad_names]
+            missing_optional = [nad for nad in optional_nads if nad not in nad_names]
             
-            if missing_nads:
-                self.logger.error(f"Missing NetworkAttachmentDefinitions: {missing_nads}")
+            if missing_required:
+                self.logger.error(f"Missing required NetworkAttachmentDefinitions: {missing_required}")
                 return False
+            
+            if missing_optional:
+                self.logger.warning(f"Optional NADs not found (MEC not deployed): {missing_optional}")
             
             self.logger.success(f"Found {len(nads)} NetworkAttachmentDefinitions")
             return True
@@ -350,9 +357,9 @@ class E2ETestSuite:
             pod1 = fiveg_pods[0]["metadata"]["name"]
             pod2 = fiveg_pods[1]["metadata"]["name"]
             
-            # Exec now returns string stdout
-            pod1_ip = self.kubectl.exec_in_pod(pod1, "5g", ["hostname", "-i"]).strip()
-            pod2_ip = self.kubectl.exec_in_pod(pod2, "5g", ["hostname", "-i"]).strip()
+            # Exec returns ExecResult with .stdout attribute
+            pod1_ip = self.kubectl.exec_in_pod(pod1, "5g", ["hostname", "-i"]).stdout.strip()
+            pod2_ip = self.kubectl.exec_in_pod(pod2, "5g", ["hostname", "-i"]).stdout.strip()
             
             if not self.network_validator.check_connectivity(pod1, pod2, "5g", pod2_ip):
                 self.logger.error(f"Pod {pod1} cannot reach pod {pod2}")

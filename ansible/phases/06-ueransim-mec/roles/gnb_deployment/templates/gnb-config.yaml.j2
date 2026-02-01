@@ -9,7 +9,9 @@ gtpIp: 0.0.0.0
 gtpPort: 2152
 ngapPort: 38412
 amfConfigs:
-  - address: {{ ueransim_topology.defaults.amf_n2_ip }}
+  # Per-cell AMF IP: {cell_n2_subnet_prefix}.{cell_id}.{amf_cell_n2_ip_suffix}
+  # gNB connects to AMF via per-cell N2 overlay (same subnet as gNB's n2-cell-X interface)
+  - address: {{ cell_n2_subnet_prefix }}.{{ cell.id }}.{{ amf_cell_n2_ip_suffix }}
     port: 38412
 slices:
 {% for slice in cell.gnb.slices | default([{ 'sst': 1, 'sd': 1 }]) %}

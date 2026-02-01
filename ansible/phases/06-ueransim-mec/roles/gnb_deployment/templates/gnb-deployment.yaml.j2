@@ -22,6 +22,8 @@ spec:
 
 ---
 # Deployment for {{ cell.gnb.name }}
+# Uses dynamic AMF discovery via K8s API query at startup.
+# This allows gNB to auto-configure even if AMF IP changes.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -43,14 +45,129 @@ spec:
         cell-id: "{{ cell.id }}"
         component: gnb
       annotations:
+        # Dynamic IPs from Whereabouts
         k8s.v1.cni.cncf.io/networks: |
           [
             {"name": "n2-cell-{{ cell.id }}", "interface": "n2"},
             {"name": "n3-cell-{{ cell.id }}", "interface": "n3"}
           ]
     spec:
+      # Disable auto-mount of ServiceAccount token - KubeEdge can't handle
+      # projected token volumes on edge nodes (causes "length error")
+      automountServiceAccountToken: false
       nodeSelector:
         kubernetes.io/hostname: {{ cell.gnb.node | default(ueransim_topology.defaults.node_defaults.gnb) }}
+      volumes:
+        - name: gnb-config-runtime
+          emptyDir: {}
+      initContainers:
+        # Discover AMF IP via K8s API and generate gNB config
+        # Token is passed as env var because KubeEdge doesn't sync ConfigMaps/Secrets to edge nodes
+        - name: amf-discovery
+          image: nicolaka/netshoot:latest
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            capabilities:
+              add: ["NET_ADMIN"]
+          env:
+            - name: K8S_API
+              value: "https://{{ k8s_api_server }}"
+            - name: NAMESPACE
+              value: "{{ namespace }}"
+            - name: CELL_ID
+              value: "{{ cell.id }}"
+            - name: DISCOVERY_TOKEN
+              value: "{{ discovery_token }}"
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -e
+              # Add default route via eth0 gateway (needed on KubeEdge edge nodes)
+              DEFAULT_GW=$(ip route | grep -E '^10\.[0-9]+\.[0-9]+\.0/24 dev eth0' | sed 's|.*/24.*||;s|.*\.||')
+              ETH0_NET=$(ip route | grep -E '^10\.[0-9]+\.[0-9]+\.0/24 dev eth0' | awk '{print $1}' | sed 's|\.0/24||')
+              if [ -n "$ETH0_NET" ] && ! ip route | grep -q "^default"; then
+                ip route add default via ${ETH0_NET}.1 dev eth0 2>/dev/null || true
+              fi
+              
+              echo "Discovering AMF N2 IP for cell ${CELL_ID}..."
+              
+              for i in $(seq 1 10); do
+                # Query AMF pod
+                RESP=$(curl -sk -H "Authorization: Bearer $DISCOVERY_TOKEN" \
+                  "${K8S_API}/api/v1/namespaces/${NAMESPACE}/pods?labelSelector=app=amf" 2>/dev/null || echo "{}")
+                
+                # Use jq to parse network-status annotation and find n2c<cell_id> interface IP
+                AMF_IP=$(echo "$RESP" | jq -r --arg iface "n2c${CELL_ID}" '
+                  .items[0].metadata.annotations["k8s.v1.cni.cncf.io/network-status"] // empty
+                  | fromjson
+                  | .[] | select(.interface == $iface) | .ips[0] // empty
+                ' 2>/dev/null || echo "")
+                
+                if [ -n "$AMF_IP" ] && [ "$AMF_IP" != "null" ]; then
+                  echo "Found AMF N2 IP: $AMF_IP"
+                  echo "$AMF_IP" > /config/amf-ip
+                  exit 0
+                fi
+                echo "Waiting for AMF... (attempt $i/10)"
+                sleep 2
+              done
+              echo "ERROR: Could not discover AMF IP after 10 attempts"
+              exit 1
+          volumeMounts:
+            - name: gnb-config-runtime
+              mountPath: /config
+        # Generate gNB config with discovered AMF IP
+        # Also waits for Multus interfaces to be ready (race condition fix)
+        - name: config-gen
+          image: {{ ueransim_topology.defaults.image }}
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/bash", "-c"]
+          args:
+            - |
+              set -euo pipefail
+              
+              # Wait for Multus network interfaces to be ready
+              echo "Waiting for network interfaces (n2, n3)..."
+              for i in $(seq 1 30); do
+                N2_READY=$(ip addr show n2 2>/dev/null | grep -c "inet " || echo 0)
+                N3_READY=$(ip addr show n3 2>/dev/null | grep -c "inet " || echo 0)
+                if [ "$N2_READY" -gt 0 ] && [ "$N3_READY" -gt 0 ]; then
+                  echo "Network interfaces ready:"
+                  ip -br addr show n2 n3
+                  break
+                fi
+                echo "Waiting for interfaces... (attempt $i/30)"
+                sleep 1
+              done
+              
+              AMF_IP=$(cat /config/amf-ip)
+              echo "Generating gNB config with AMF IP: $AMF_IP"
+              cat > /config/gnb.yaml <<EOF
+              mcc: '{{ ueransim_topology.defaults.mcc }}'
+              mnc: '{{ ueransim_topology.defaults.mnc }}'
+              nci: '{{ cell.gnb.nci }}'
+              idLength: 32
+              tac: {{ cell.gnb.tac }}
+              linkIp: 0.0.0.0
+              ngapIp: 0.0.0.0
+              gtpIp: 0.0.0.0
+              gtpPort: 2152
+              ngapPort: 38412
+              amfConfigs:
+                - address: $AMF_IP
+                  port: 38412
+              slices:
+{% for slice in cell.gnb.slices | default([{ 'sst': 1, 'sd': 1 }]) %}
+                - sst: {{ slice.sst }}
+                  sd: {{ slice.sd }}
+{% endfor %}
+              ignoreStreamIds: true
+              EOF
+              echo "gNB config generated:"
+              cat /config/gnb.yaml
+          volumeMounts:
+            - name: gnb-config-runtime
+              mountPath: /config
       containers:
         - name: gnb
           image: {{ ueransim_topology.defaults.image }}
@@ -60,7 +177,7 @@ spec:
             capabilities:
               add: ["NET_ADMIN", "SYS_ADMIN"]
           command: ["{{ gnb_binary_path }}"]
-          args: ["-c", "{{ gnb_config_path }}"]
+          args: ["-c", "/config/gnb.yaml"]
           ports:
             - containerPort: 38412
               name: ngap
@@ -69,12 +186,11 @@ spec:
               name: gtpu
               protocol: UDP
           volumeMounts:
-            - name: config
-              mountPath: /UERANSIM/config
-              readOnly: true
+            - name: gnb-config-runtime
+              mountPath: /config
           readinessProbe:
-            tcpSocket:
-              port: 38412
+            exec:
+              command: ["pgrep", "-f", "nr-gnb"]
             initialDelaySeconds: 10
             periodSeconds: 5
             timeoutSeconds: 3
@@ -94,9 +210,4 @@ spec:
             limits:
               cpu: "1000m"
               memory: "1Gi"
-      volumes:
-        - name: config
-          configMap:
-            name: {{ cell.gnb.name }}-config
 {% endfor %}
-

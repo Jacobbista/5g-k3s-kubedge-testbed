@@ -167,19 +167,75 @@ spec:
 - ❌ Static IP in Service manifest
 - ❌ Still requires gnb-endpoints-sync to populate externalIPs dynamically
 
-## Recommended Implementation
+## Current Implementation (Dynamic Discovery)
 
-**SHORT TERM** (current):
+**✅ IMPLEMENTED: Option B (Init Container)**
 
-- ✅ Keep `gnb-endpoints-sync` + `hostAliases`
-- ✅ Documented (this file)
-- ✅ Works immediately
+UE pods now use dynamic gNB discovery via init container:
 
-**LONG TERM** (improvement):
+1. **gnb-discovery** init container queries Kubernetes Endpoints API
+2. Extracts gNB N2 IP from the endpoint
+3. Writes IP to shared volume
+4. **config-gen** init container reads IP and generates UE config with direct IP
 
-- 🔧 Implement **Option A** (Fix CoreDNS on EdgeCore)
-- 🧹 Remove `hostAliases` from UE template
-- 📖 Update documentation
+**Advantages**:
+
+- ✅ Fully dynamic - no hardcoded IPs
+- ✅ Works on edge nodes without kube-proxy
+- ✅ Supports dynamic topology (add/remove gNBs at runtime)
+- ✅ When gNB restarts with new IP, just restart UE pod
+
+**Architecture**:
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                     gNB Deployment                              │
+│  - Gets dynamic IP from whereabouts (e.g., 10.202.1.23)         │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│              gnb-endpoints-sync CronJob (every 1m)              │
+│  - Reads gNB pod's Multus network-status annotation             │
+│  - Updates Kubernetes Endpoints with N2 IP                      │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                    Kubernetes Endpoints                         │
+│  gnb-1 → 10.202.1.23 (N2 IP, not eth0)                          │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│              UE Pod Init Container (gnb-discovery)              │
+│  - Queries: GET /api/v1/namespaces/5g/endpoints/gnb-1           │
+│  - Extracts IP: 10.202.1.23                                     │
+│  - Writes to: /discovery/gnb-ip                                 │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│              UE Pod Init Container (config-gen)                 │
+│  - Reads gNB IP from /discovery/gnb-ip                          │
+│  - Generates ue-config.yaml with gnbSearchList: [10.202.1.23]   │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                    UE Main Container                            │
+│  - Connects directly to gNB N2 IP                               │
+│  - No DNS resolution needed                                     │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**For Dynamic Topology Management**:
+
+To add a new gNB + UEs at runtime:
+1. Create new gNB Deployment + Service (via API/UI)
+2. gnb-endpoints-sync will populate the endpoint within 1 minute
+3. Create new UE StatefulSet pointing to the new gNB
+4. UE init container will discover gNB IP automatically
 
 ## Files Involved
 

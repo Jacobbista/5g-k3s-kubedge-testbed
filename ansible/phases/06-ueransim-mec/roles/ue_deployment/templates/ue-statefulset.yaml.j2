@@ -2,6 +2,9 @@
 {% set ue_count = (cell.ues | length) %}
 {% if ue_count > 0 %}
 ---
+# UE StatefulSet for cell {{ cell.id }}
+# Uses dynamic gNB discovery via K8s API query at startup.
+# This allows UE to auto-configure even if gNB restarts with a new IP.
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
@@ -9,6 +12,7 @@ metadata:
   namespace: {{ namespace }}
   labels:
     app: ue
+    component: ue
     cell-id: "{{ cell.id }}"
 spec:
   serviceName: ue-cell-{{ cell.id }}
@@ -21,24 +25,78 @@ spec:
     metadata:
       labels:
         app: ue
+        component: ue
         cell-id: "{{ cell.id }}"
       annotations:
         k8s.v1.cni.cncf.io/networks: |
           [ {"name": "n2-cell-{{ cell.id }}", "interface": "n2"} ]
     spec:
+      # Disable auto-mount of ServiceAccount token - KubeEdge can't handle
+      # projected token volumes on edge nodes (causes "length error")
+      automountServiceAccountToken: false
       nodeSelector:
         kubernetes.io/hostname: {{ (cell.ues[0].node | default(ueransim_topology.defaults.node_defaults.ue)) if ue_count>0 else (ueransim_topology.defaults.node_defaults.ue) }}
-      # WORKAROUND: EdgeCore doesn't have access to CoreDNS
-      # See roles/endpoints_sync/README.md for proper long-term solution
-      # TODO: Configure EdgeCore to use cluster CoreDNS and remove this
-      hostAliases:
-        - ip: "10.202.1.10"  # gNB N2 IP (hardcoded - must match gnb-endpoints-sync output)
-          hostnames:
-            - "{{ cell.gnb.name }}.{{ namespace }}.svc.cluster.local"
       volumes:
         - name: ue-config-runtime
           emptyDir: {}
       initContainers:
+        # Discover gNB IP via K8s API
+        # Token is passed as env var because KubeEdge doesn't sync ConfigMaps/Secrets to edge nodes
+        - name: gnb-discovery
+          image: nicolaka/netshoot:latest
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            capabilities:
+              add: ["NET_ADMIN"]
+          env:
+            - name: K8S_API
+              value: "https://{{ k8s_api_server }}"
+            - name: NAMESPACE
+              value: "{{ namespace }}"
+            - name: GNB_NAME
+              value: "{{ cell.gnb.name }}"
+            - name: DISCOVERY_TOKEN
+              value: "{{ discovery_token }}"
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -e
+              # Add default route via eth0 gateway (needed on KubeEdge edge nodes)
+              DEFAULT_GW=$(ip route | grep -E '^10\.[0-9]+\.[0-9]+\.0/24 dev eth0' | sed 's|.*/24.*||;s|.*\.||')
+              ETH0_NET=$(ip route | grep -E '^10\.[0-9]+\.[0-9]+\.0/24 dev eth0' | awk '{print $1}' | sed 's|\.0/24||')
+              if [ -n "$ETH0_NET" ] && ! ip route | grep -q "^default"; then
+                ip route add default via ${ETH0_NET}.1 dev eth0 2>/dev/null || true
+              fi
+              
+              echo "Discovering gNB ${GNB_NAME} N2 IP..."
+              
+              for i in $(seq 1 10); do
+                # Query gNB pod
+                RESP=$(curl -sk -H "Authorization: Bearer $DISCOVERY_TOKEN" \
+                  "${K8S_API}/api/v1/namespaces/${NAMESPACE}/pods?labelSelector=app=${GNB_NAME}" 2>/dev/null || echo "{}")
+                
+                # Use jq to parse network-status annotation and find n2 interface IP
+                GNB_IP=$(echo "$RESP" | jq -r '
+                  .items[0].metadata.annotations["k8s.v1.cni.cncf.io/network-status"] // empty
+                  | fromjson
+                  | .[] | select(.interface == "n2") | .ips[0] // empty
+                ' 2>/dev/null || echo "")
+                
+                if [ -n "$GNB_IP" ] && [ "$GNB_IP" != "null" ]; then
+                  echo "Found gNB N2 IP: $GNB_IP"
+                  echo "$GNB_IP" > /config/gnb-ip
+                  exit 0
+                fi
+                echo "Waiting for gNB... (attempt $i/10)"
+                sleep 2
+              done
+              echo "ERROR: Could not discover gNB IP after 10 attempts"
+              exit 1
+          volumeMounts:
+            - name: ue-config-runtime
+              mountPath: /config
+        # Generate UE config with discovered gNB IP
+        # Also waits for Multus interface to be ready (race condition fix)
         - name: config-gen
           image: {{ ueransim_topology.defaults.image }}
           imagePullPolicy: IfNotPresent
@@ -46,9 +104,26 @@ spec:
           args:
             - |
               set -euo pipefail
+              
+              # Wait for Multus network interface to be ready
+              echo "Waiting for network interface (n2)..."
+              for i in $(seq 1 30); do
+                N2_READY=$(ip addr show n2 2>/dev/null | grep -c "inet " || echo 0)
+                if [ "$N2_READY" -gt 0 ]; then
+                  echo "Network interface ready:"
+                  ip -br addr show n2
+                  break
+                fi
+                echo "Waiting for n2 interface... (attempt $i/30)"
+                sleep 1
+              done
+              
               ORD=${HOSTNAME##*-}
+              GNB_IP=$(cat /UERANSIM/config/gnb-ip)
+              echo "Generating UE config with gNB IP: $GNB_IP"
+              
               # Arrays rendered from topology
-              SUPIS=({% for ue in cell.ues %} "imsi-00101123456{{ ue.supi_suffix }}"{% if not loop.last %} {% endif %}{% endfor %})
+              SUPIS=({% for ue in cell.ues %} "imsi-{{ ueransim_topology.defaults.mcc }}{{ ueransim_topology.defaults.mnc }}{{ ueransim_topology.defaults.imsi_msin_base }}{{ ue.supi_suffix }}"{% if not loop.last %} {% endif %}{% endfor %})
               APNS=({% for ue in cell.ues %} "{{ ue.apn }}"{% if not loop.last %} {% endif %}{% endfor %})
               SST=({% for ue in cell.ues %} "{{ ue.slice.sst }}"{% if not loop.last %} {% endif %}{% endfor %})
               SD=({% for ue in cell.ues %} "{{ ue.slice.sd }}"{% if not loop.last %} {% endif %}{% endfor %})
@@ -71,7 +146,7 @@ spec:
               imeiSv: "4370816125816151"
               tunNetmask: "255.255.255.0"
               gnbSearchList:
-                - {{ cell.gnb.name }}.{{ namespace }}.svc.cluster.local
+                - $GNB_IP
               uacAic:
                 mps: false
                 mcs: false
@@ -106,6 +181,7 @@ spec:
                 uplink: "full"
                 downlink: "full"
               EOF
+              echo "UE config generated for $SUPI"
           volumeMounts:
             - name: ue-config-runtime
               mountPath: /UERANSIM/config
@@ -146,5 +222,3 @@ spec:
               memory: "512Mi"
 {% endif %}
 {% endfor %}
-
-

@@ -1,7 +1,7 @@
 # 5G K3s KubeEdge Testbed - Test Suite
 # Simple Makefile wrapper for the Textual CLI and run_tests.py
 
-.PHONY: help all cli e2e protocols performance resilience clean clean-all
+.PHONY: help all cli test e2e protocols performance resilience ran clean clean-all
 
 VENVDIR := venv
 REQS    := requirements.txt
@@ -24,6 +24,9 @@ $(STAMP): $(REQS)
 	@touch $(STAMP)
 	@echo "✅ Environment ready!"
 
+test:
+	@python3 run_tests.py
+
 e2e:
 	@python3 run_tests.py -s e2e
 
@@ -35,6 +38,9 @@ performance:
 
 resilience:
 	@python3 run_tests.py -s resilience
+
+ran:
+	@python3 run_tests.py -s ran
 
 verbose:
 	@python3 run_tests.py -v
@@ -54,10 +60,20 @@ clean-all: clean
 help:
 	@echo "5G K3s KubeEdge Testbed - Test Suite"
 	@echo "====================================="
-	@echo "Targets:"
-	@echo "  make / make cli   - Launch Interactive CLI"
-	@echo "  e2e|protocols|performance|resilience - Run specific suites"
-	@echo "  verbose           - Run all tests verbosely"
-	@echo "  list              - List available tests"
-	@echo "  clean             - Remove caches/logs"
-	@echo "  clean-all         - Remove venv too"
+	@echo ""
+	@echo "Quick start:"
+	@echo "  make test         - Run all tests (recommended)"
+	@echo ""
+	@echo "Individual suites:"
+	@echo "  make e2e          - End-to-end deployment tests"
+	@echo "  make protocols    - 5G protocol tests (NGAP, PFCP, GTP-U)"
+	@echo "  make performance  - Performance benchmarks"
+	@echo "  make resilience   - Failure recovery tests"
+	@echo "  make ran          - Physical RAN integration tests"
+	@echo ""
+	@echo "Other:"
+	@echo "  make cli          - Launch Interactive CLI"
+	@echo "  make verbose      - Run all tests with verbose output"
+	@echo "  make list         - List available tests"
+	@echo "  make clean        - Remove caches/logs"
+	@echo "  make clean-all    - Remove venv too"

@@ -33,6 +33,27 @@
   args:
     creates: /etc/kubeedge/config/edgecore.yaml
 
+- name: Get CoreDNS ClusterIP from master
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Service
+    name: kube-dns
+    namespace: kube-system
+    kubeconfig: "{{ kubeconfig_path }}"
+  delegate_to: "{{ groups['masters'][0] }}"
+  register: coredns_svc
+
+- name: Configure EdgeCore to use CoreDNS (enables DNS resolution for edge pods)
+  blockinfile:
+    path: /etc/kubeedge/config/edgecore.yaml
+    marker: "# {mark} ANSIBLE MANAGED - CoreDNS Configuration"
+    insertafter: "^modules:"
+    block: |2
+        edged:
+          clusterDNS: "{{ coredns_svc.resources[0].spec.clusterIP }}"
+          clusterDomain: "cluster.local"
+  notify: Restart edgecore
+
 - name: Ensure edgecore service
   copy:
     dest: /etc/systemd/system/edgecore.service

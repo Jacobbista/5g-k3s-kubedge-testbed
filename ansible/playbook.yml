@@ -1,7 +1,7 @@
 ---
 # LEGACY PLAYBOOK - DEPRECATED
-# Questo playbook è stato sostituito dalla struttura organizzata in fasi
-# Usa invece: ansible-playbook phases/00-main-playbook.yml
+# This playbook has been replaced by a phase-based structure.
+# Please use instead: ansible-playbook phases/00-main-playbook.yml
 
 - name: "⚠️  DEPRECATED PLAYBOOK"
   hosts: localhost
@@ -10,20 +10,20 @@
     - name: "Display deprecation notice"
       debug:
         msg: |
-          ⚠️  QUESTO PLAYBOOK È STATO DEPRECATO
+          ⚠️  THIS PLAYBOOK IS DEPRECATED
           =====================================
-          
-          Il progetto è stato riorganizzato in fasi per un deployment più controllato.
-          
-          🚀 NUOVO COMANDO:
+
+          The project has been reorganized into phases for more controlled deployment.
+
+          🚀 NEW COMMAND:
           ansible-playbook phases/00-main-playbook.yml
-          
-          📁 STRUTTURA ORGANIZZATA:
-          phases/01-infrastructure/     - Setup infrastruttura base
-          phases/02-kubernetes/         - Cluster Kubernetes (k3s)
-          phases/03-kubeedge/           - Integrazione KubeEdge
-          phases/04-overlay-network/    - Rete overlay (OVS + Multus)
+
+          📁 ORGANIZED STRUCTURE:
+          phases/01-infrastructure/     - Basic infrastructure setup
+          phases/02-kubernetes/         - Kubernetes cluster (k3s)
+          phases/03-kubeedge/           - KubeEdge integration
+          phases/04-overlay-network/    - Overlay network (OVS + Multus)
           phases/05-5g-core/            - 5G Core Network Functions
-          phases/06-ueransim-mec/       - UERANSIM e MEC
-          
-          📖 Per maggiori dettagli: cat phases/README.md
+          phases/06-ueransim-mec/       - UERANSIM and MEC
+
+          📖 For more details: cat phases/README.md

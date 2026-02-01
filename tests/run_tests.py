@@ -1,5 +1,11 @@
+#!/usr/bin/env python3
 """
 Main test runner for 5G K3s KubeEdge Testbed
+
+This script automatically:
+1. Sets up the virtual environment
+2. Updates kubeconfig from master VM
+3. Runs the requested test suites
 """
 import sys
 import os
@@ -7,313 +13,290 @@ import argparse
 import subprocess
 from pathlib import Path
 
-# Add current directory to path
-sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
-from utils.test_helpers import TestConfig, TestLogger
+# Script directory
+SCRIPT_DIR = Path(__file__).parent.resolve()
+VENV_DIR = SCRIPT_DIR / "venv"
+KUBECONFIG_PATH = SCRIPT_DIR / "kubeconfig"
+REQUIREMENTS_PATH = SCRIPT_DIR / "requirements.txt"
+
+
+def is_in_venv():
+    """Check if we're running inside the virtual environment"""
+    return sys.prefix == str(VENV_DIR) or sys.executable.startswith(str(VENV_DIR))
+
+
+def get_venv_python():
+    """Get path to venv's python"""
+    if os.name == 'nt':
+        return VENV_DIR / "Scripts" / "python.exe"
+    return VENV_DIR / "bin" / "python"
+
+
+def ensure_venv():
+    """Ensure virtual environment exists and has dependencies"""
+    venv_python = get_venv_python()
+    
+    if not VENV_DIR.exists():
+        print("🔧 Creating virtual environment...")
+        subprocess.run([sys.executable, "-m", "venv", str(VENV_DIR)], check=True)
+        print("✅ Virtual environment created")
+    
+    # Install dependencies if needed
+    if REQUIREMENTS_PATH.exists():
+        print("🔍 Checking dependencies...")
+        try:
+            result = subprocess.run(
+                [str(venv_python), "-c", "import kubernetes, yaml, requests"],
+                capture_output=True, text=True
+            )
+            if result.returncode != 0:
+                raise Exception("Dependencies not installed")
+            print("✅ Dependencies ready")
+        except Exception:
+            print("📦 Installing dependencies...")
+            pip_path = VENV_DIR / ("Scripts" if os.name == 'nt' else "bin") / "pip"
+            subprocess.run([str(pip_path), "install", "-q", "-r", str(REQUIREMENTS_PATH)], check=True)
+            print("✅ Dependencies installed")
+    
+    return str(venv_python)
 
 
 def check_vagrant_vms():
     """Check if Vagrant VMs are running"""
     try:
-        result = subprocess.run(["vagrant", "status"], 
-                              capture_output=True, text=True, timeout=30)
+        # Need to be in project root for vagrant status
+        project_root = SCRIPT_DIR.parent
+        result = subprocess.run(
+            ["vagrant", "status"], 
+            capture_output=True, text=True, timeout=30,
+            cwd=str(project_root)
+        )
         if result.returncode != 0:
-            print("❌ Vagrant not available or not in project directory")
+            print("❌ Vagrant not available")
             return False
         
-        status_output = result.stdout.lower()
-        required_vms = ["master", "worker", "edge"]
-        
-        for vm in required_vms:
-            if f"{vm}" not in status_output or "running" not in status_output:
+        status = result.stdout.lower()
+        for vm in ["master", "worker", "edge"]:
+            if f"{vm}" not in status or "running" not in status:
                 print(f"❌ VM '{vm}' is not running")
                 return False
         
         print("✅ All required Vagrant VMs are running")
         return True
         
-    except subprocess.TimeoutExpired:
-        print("❌ Vagrant status check timed out")
-        return False
-    except FileNotFoundError:
-        print("❌ Vagrant command not found")
-        return False
     except Exception as e:
         print(f"❌ Failed to check Vagrant VMs: {e}")
         return False
 
 
-def ensure_venv():
-    """Ensure virtual environment is set up and activated"""
-    venv_path = Path(__file__).parent / "venv"
-    
-    if not venv_path.exists():
-        print("🔧 Creating virtual environment...")
-        try:
-            subprocess.run([sys.executable, "-m", "venv", str(venv_path)], check=True)
-            print("✅ Virtual environment created successfully")
-        except subprocess.CalledProcessError as e:
-            print(f"❌ Failed to create virtual environment: {e}")
-            raise
-    else:
-        print("✅ Virtual environment already exists")
-    
-    # Activate venv and install dependencies
-    if os.name == 'nt':  # Windows
-        activate_script = venv_path / "Scripts" / "activate.bat"
-        pip_path = venv_path / "Scripts" / "pip.exe"
-        python_path = venv_path / "Scripts" / "python.exe"
-    else:  # Unix/Linux
-        activate_script = venv_path / "bin" / "activate"
-        pip_path = venv_path / "bin" / "pip"
-        python_path = venv_path / "bin" / "python"
-    
-    # Install dependencies if needed
-    requirements_file = Path(__file__).parent / "requirements.txt"
-    if requirements_file.exists():
-        # Check if dependencies are already installed
-        print("🔍 Checking dependencies...")
-        try:
-            # Try to import the main dependencies to see if they're already installed
-            check_result = subprocess.run([str(python_path), "-c", 
-                                        "import yaml, requests; print('deps_ok')"], 
-                                       capture_output=True, text=True, timeout=10)
-            if check_result.returncode == 0 and "deps_ok" in check_result.stdout:
-                print("✅ Dependencies already installed")
-            else:
-                print("📦 Installing dependencies...")
-                result = subprocess.run([str(pip_path), "install", "-r", str(requirements_file)], 
-                                      check=True, capture_output=True, text=True)
-                print("✅ Dependencies installed successfully")
-        except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
-            print("📦 Installing dependencies...")
-            result = subprocess.run([str(pip_path), "install", "-r", str(requirements_file)], 
-                                  check=True, capture_output=True, text=True)
-            print("✅ Dependencies installed successfully")
-    else:
-        print("⚠️  No requirements.txt found, skipping dependency installation")
-    
-    return str(python_path)
+def update_kubeconfig():
+    """Fetch kubeconfig from master VM"""
+    print("🔄 Updating kubeconfig from master VM...")
+    try:
+        project_root = SCRIPT_DIR.parent
+        result = subprocess.run(
+            ["vagrant", "ssh", "master", "-c", "sudo cat /etc/rancher/k3s/k3s.yaml"],
+            capture_output=True, text=True, timeout=30,
+            cwd=str(project_root)
+        )
+        
+        if result.returncode != 0:
+            print(f"⚠️  Could not fetch kubeconfig")
+            return KUBECONFIG_PATH.exists()
+        
+        # Replace localhost with master IP
+        content = result.stdout.replace("127.0.0.1", "192.168.56.10")
+        
+        with open(KUBECONFIG_PATH, "w") as f:
+            f.write(content)
+        
+        os.chmod(KUBECONFIG_PATH, 0o600)
+        print("✅ Kubeconfig updated")
+        return True
+        
+    except Exception as e:
+        print(f"⚠️  Could not update kubeconfig: {e}")
+        return KUBECONFIG_PATH.exists()
 
 
-class TestRunner:
-    """Main test runner"""
+def run_in_venv():
+    """Re-execute this script inside the venv"""
+    venv_python = ensure_venv()
     
-    def __init__(self, verbose: bool = False):
-        self.config = TestConfig()
-        self.logger = TestLogger(verbose)
-        self.verbose = verbose
+    # Re-run this script with venv python
+    env = os.environ.copy()
+    env["KUBECONFIG"] = str(KUBECONFIG_PATH)
+    env["_IN_VENV"] = "1"  # Flag to prevent infinite recursion
     
-    def run_test_suite(self, suite_name: str) -> bool:
-        """Run a specific test suite"""
-        self.logger.info(f"Running {suite_name} test suite...")
-        
-        # Map suite names to their modules
-        suite_modules = {
-            "e2e": "core.test_e2e",
-            "protocols": "protocols.test_5g_protocols",
-            "performance": "performance.test_performance",
-            "resilience": "resilience.test_resilience"
-        }
-        
-        if suite_name not in suite_modules:
-            self.logger.error(f"Unknown test suite: {suite_name}")
-            return False
-        
-        # Check if suite is enabled
-        if not self.config.get(f"suites.{suite_name}.enabled", True):
-            self.logger.info(f"Test suite {suite_name} is disabled")
-            return True
-        
-        # Run the test suite
-        module_path = suite_modules[suite_name]
-        script_path = Path(__file__).parent / (module_path.replace(".", "/") + ".py")
-        
-        if not script_path.exists():
-            self.logger.error(f"Test script not found: {script_path}")
-            return False
-        
-        try:
-            # Run the test script
-            cmd = [sys.executable, str(script_path)]
-            if self.verbose:
-                cmd.append("-v")
-            
-            result = subprocess.run(cmd, capture_output=False, text=True)
-            return result.returncode == 0
-            
-        except Exception as e:
-            self.logger.error(f"Failed to run {suite_name} test suite: {e}")
-            return False
-    
-    def run_all_tests(self) -> bool:
-        """Run all enabled test suites"""
-        self.logger.info("Running all test suites...")
-        
-        suites = ["e2e", "protocols", "performance", "resilience"]
-        results = {}
-        
-        for suite in suites:
-            self.logger.info(f"\n{'='*50}")
-            self.logger.info(f"Running {suite.upper()} tests")
-            self.logger.info(f"{'='*50}")
-            
-            success = self.run_test_suite(suite)
-            results[suite] = success
-            
-            if success:
-                self.logger.success(f"{suite.upper()} tests passed")
-            else:
-                self.logger.error(f"{suite.upper()} tests failed")
-        
-        # Summary
-        self.logger.info(f"\n{'='*50}")
-        self.logger.info("TEST SUMMARY")
-        self.logger.info(f"{'='*50}")
-        
-        passed = sum(1 for success in results.values() if success)
-        total = len(results)
-        
-        for suite, success in results.items():
-            status = "✅ PASSED" if success else "❌ FAILED"
-            self.logger.info(f"{suite.upper():12} {status}")
-        
-        self.logger.info(f"\nTotal: {passed}/{total} test suites passed")
-        
-        if passed == total:
-            self.logger.success("🎉 All test suites passed!")
-            return True
-        else:
-            self.logger.error("💥 Some test suites failed!")
-            return False
-    
-    def run_phases(self, phases: list) -> bool:
-        """Run specific test phases"""
-        self.logger.info(f"Running test phases: {', '.join(phases)}")
-        
-        # Map phases to test suites
-        phase_mapping = {
-            "infrastructure": ["e2e"],
-            "5g-core": ["e2e", "protocols"],
-            "ueransim": ["e2e"],
-            "e2e": ["e2e", "protocols", "performance"],
-            "performance": ["performance"],
-            "resilience": ["resilience"]
-        }
-        
-        suites_to_run = set()
-        for phase in phases:
-            if phase in phase_mapping:
-                suites_to_run.update(phase_mapping[phase])
-            else:
-                self.logger.warning(f"Unknown phase: {phase}")
-        
-        if not suites_to_run:
-            self.logger.error("No valid phases specified")
-            return False
-        
-        # Run the suites
-        results = {}
-        for suite in suites_to_run:
-            success = self.run_test_suite(suite)
-            results[suite] = success
-        
-        # Summary
-        passed = sum(1 for success in results.values() if success)
-        total = len(results)
-        
-        self.logger.info(f"\nPhase results: {passed}/{total} test suites passed")
-        return passed == total
+    result = subprocess.run(
+        [venv_python] + sys.argv,
+        env=env
+    )
+    sys.exit(result.returncode)
 
 
 def main():
-    """Main function"""
+    """Main entry point"""
+    # If not in venv and not flagged as re-entry, bootstrap
+    if not is_in_venv() and os.environ.get("_IN_VENV") != "1":
+        print("🚀 Starting 5G K3s KubeEdge Testbed Test Suite")
+        print("=" * 50)
+        
+        # Check VMs
+        if not check_vagrant_vms():
+            print("\n💡 Please start the testbed with: vagrant up")
+            sys.exit(1)
+        
+        # Update kubeconfig
+        if not update_kubeconfig():
+            if not KUBECONFIG_PATH.exists():
+                print("❌ No kubeconfig available")
+                sys.exit(1)
+        
+        # Re-run in venv
+        run_in_venv()
+        return
+    
+    # === Running inside venv now ===
+    
+    # Set kubeconfig env
+    os.environ["KUBECONFIG"] = str(KUBECONFIG_PATH)
+    
+    # Now safe to import heavy modules
+    sys.path.insert(0, str(SCRIPT_DIR))
+    from utils.test_helpers import TestConfig, TestLogger
+    
     parser = argparse.ArgumentParser(description="5G K3s KubeEdge Testbed Test Runner")
     parser.add_argument("-v", "--verbose", action="store_true", help="Verbose output")
-    parser.add_argument("-s", "--suite", choices=["e2e", "protocols", "performance", "resilience"], 
+    parser.add_argument("-s", "--suite", 
+                       choices=["e2e", "protocols", "performance", "resilience", "ran"],
                        help="Run specific test suite")
-    parser.add_argument("-p", "--phases", nargs="+", 
+    parser.add_argument("-p", "--phases", nargs="+",
                        choices=["infrastructure", "5g-core", "ueransim", "e2e", "performance", "resilience"],
                        help="Run specific test phases")
-    parser.add_argument("--list", action="store_true", help="List available test suites and phases")
-    parser.add_argument("--no-venv", action="store_true", help="Skip virtual environment setup")
+    parser.add_argument("--list", action="store_true", help="List available tests")
     
     args = parser.parse_args()
-    
-    print("🚀 Starting 5G K3s KubeEdge Testbed Test Suite")
-    print("=" * 50)
-    
-    # Check Vagrant VMs first
-    if not check_vagrant_vms():
-        print("\n💡 Please start the testbed with: vagrant up")
-        sys.exit(1)
-    
-    # Check if kubeconfig exists locally, if not try to get it from VM
-    local_kubeconfig = Path(__file__).parent / "kubeconfig"
-    
-    if not local_kubeconfig.exists():
-        print("📋 Getting kubeconfig from master VM...")
-        try:
-            # Use vagrant ssh to copy kubeconfig
-            result = subprocess.run([
-                "vagrant", "ssh", "master", "-c", 
-                "cat /home/vagrant/kubeconfig"
-            ], cwd=Path(__file__).parent.parent, capture_output=True, text=True, check=True)
-            
-            # Write to local file
-            local_kubeconfig.write_text(result.stdout)
-            print("✅ Kubeconfig copied successfully")
-        except subprocess.CalledProcessError as e:
-            print(f"❌ Failed to get kubeconfig: {e}")
-            print("💡 Make sure the testbed is fully deployed")
-            print("💡 You can also manually copy kubeconfig from master VM")
-            sys.exit(1)
-    
-    # Update config to use local kubeconfig
-    config = TestConfig()
-    config.config["cluster"]["kubeconfig_path"] = str(local_kubeconfig)
-
-    # Also export for any code honoring the env var (kubectl, client libs, etc.)
-    os.environ["KUBECONFIG"] = str(local_kubeconfig)
-    
-    # Ensure venv is set up unless explicitly disabled
-    if not args.no_venv:
-        try:
-            ensure_venv()
-        except Exception as e:
-            print(f"❌ Failed to set up virtual environment: {e}")
-            print("💡 Use --no-venv to skip venv setup")
-            sys.exit(1)
     
     print("✅ Environment ready, starting tests...")
     print("=" * 50)
     
-    runner = TestRunner(verbose=args.verbose)
+    logger = TestLogger(args.verbose)
+    config = TestConfig()
     
     if args.list:
-        print("Available test suites:")
+        print("\nAvailable test suites:")
         print("  e2e         - End-to-end integration tests")
-        print("  protocols   - 5G protocol tests (PFCP, NGAP, GTP-U, NAS)")
+        print("  protocols   - 5G protocol tests (PFCP, NGAP, GTP-U)")
         print("  performance - Performance and stress tests")
-        print("  resilience  - Failure recovery and fault tolerance tests")
-        print("\nAvailable test phases:")
-        print("  infrastructure - Basic infrastructure tests")
-        print("  5g-core       - 5G Core network function tests")
-        print("  ueransim      - UERANSIM simulator tests")
-        print("  e2e           - Complete end-to-end tests")
-        print("  performance   - Performance tests")
-        print("  resilience    - Resilience tests")
+        print("  resilience  - Failure recovery tests")
+        print("  ran         - Physical RAN integration tests")
+        print("\nRun with: make <suite>  or  python run_tests.py -s <suite>")
         return
     
-    if args.suite:
-        success = runner.run_test_suite(args.suite)
-    elif args.phases:
-        success = runner.run_phases(args.phases)
-    else:
-        success = runner.run_all_tests()
+    # Suite mapping
+    suite_modules = {
+        "e2e": "core.test_e2e",
+        "protocols": "protocols.test_5g_protocols",
+        "performance": "performance.test_performance",
+        "resilience": "resilience.test_resilience",
+        "ran": "ran.test_physical_ran"
+    }
     
-    sys.exit(0 if success else 1)
+    def run_suite(suite_name: str, force: bool = False) -> bool:
+        """Run a single test suite"""
+        if suite_name not in suite_modules:
+            logger.error(f"Unknown suite: {suite_name}")
+            return False
+        
+        # Check if suite is enabled (skip check if forced via -s flag)
+        if not force and not config.get(f"suites.{suite_name}.enabled", True):
+            logger.warning(f"Skipping {suite_name} (disabled in config)")
+            return True  # Don't count as failure
+        
+        module_path = suite_modules[suite_name]
+        script_path = SCRIPT_DIR / (module_path.replace(".", "/") + ".py")
+        
+        if not script_path.exists():
+            logger.error(f"Test script not found: {script_path}")
+            return False
+        
+        cmd = [sys.executable, str(script_path)]
+        if args.verbose:
+            cmd.append("-v")
+        
+        result = subprocess.run(cmd)
+        return result.returncode == 0
+    
+    # Determine what to run
+    force_run = False  # Force run ignores enabled flag
+    if args.suite:
+        suites = [args.suite]
+        force_run = True  # Explicit -s flag forces the suite to run
+    elif args.phases:
+        phase_map = {
+            "infrastructure": ["e2e"],
+            "5g-core": ["e2e", "protocols"],
+            "ueransim": ["e2e"],
+            "e2e": ["e2e", "protocols"],
+            "performance": ["performance"],
+            "resilience": ["resilience"]
+        }
+        suites = []
+        for phase in args.phases:
+            suites.extend(phase_map.get(phase, []))
+        suites = list(dict.fromkeys(suites))  # Unique, preserve order
+    else:
+        # Default: only run enabled suites
+        suites = ["e2e", "protocols", "performance", "resilience"]
+    
+    # Run suites
+    results = {}  # suite -> (success, skipped)
+    for suite in suites:
+        # Check if enabled (unless forced)
+        if not force_run and not config.get(f"suites.{suite}.enabled", True):
+            logger.warning(f"⏭️  Skipping {suite.upper()} (disabled in test_config.yaml)")
+            results[suite] = (True, True)  # skipped
+            continue
+        
+        success = run_suite(suite, force=force_run)
+        results[suite] = (success, False)  # not skipped
+        
+        if success:
+            logger.success(f"{suite.upper()} tests passed")
+        else:
+            logger.error(f"{suite.upper()} tests failed")
+    
+    # Summary
+    print("\n" + "=" * 50)
+    print("TEST SUMMARY")
+    print("=" * 50)
+    
+    passed = sum(1 for (success, skipped) in results.values() if success and not skipped)
+    skipped = sum(1 for (_, skip) in results.values() if skip)
+    failed = sum(1 for (success, skip) in results.values() if not success and not skip)
+    total = len(results) - skipped
+    
+    for suite, (success, skip) in results.items():
+        if skip:
+            status = "⏭️  SKIPPED"
+        elif success:
+            status = "✅ PASSED"
+        else:
+            status = "❌ FAILED"
+        print(f"  {suite.upper():12} {status}")
+    
+    if skipped:
+        print(f"\nSkipped: {skipped} (disabled in config)")
+    print(f"Results: {passed}/{total} test suites passed")
+    
+    if failed == 0:
+        print("🎉 All enabled test suites passed!")
+        sys.exit(0)
+    else:
+        print("💥 Some test suites failed!")
+        sys.exit(1)
 
 
 if __name__ == "__main__":
