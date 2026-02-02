@@ -1,0 +1,329 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboards
+  namespace: {{ monitoring_namespace }}
+data:
+  cluster-overview.json: |
+    {
+      "annotations": { "list": [] },
+      "editable": true,
+      "fiscalYearStartMonth": 0,
+      "graphTooltip": 0,
+      "id": null,
+      "links": [],
+      "liveNow": false,
+      "panels": [
+        {
+          "gridPos": { "h": 4, "w": 6, "x": 0, "y": 0 },
+          "id": 1,
+          "options": { "colorMode": "value", "graphMode": "none", "justifyMode": "auto", "orientation": "auto", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "textMode": "auto" },
+          "targets": [{ "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "count(kube_node_info)", "refId": "A" }],
+          "title": "Total Nodes",
+          "type": "stat"
+        },
+        {
+          "gridPos": { "h": 4, "w": 6, "x": 6, "y": 0 },
+          "id": 2,
+          "options": { "colorMode": "value", "graphMode": "none", "justifyMode": "auto", "orientation": "auto", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "textMode": "auto" },
+          "targets": [{ "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "count(kube_pod_info{namespace=\"5g\"})", "refId": "A" }],
+          "title": "5G Pods",
+          "type": "stat"
+        },
+        {
+          "gridPos": { "h": 4, "w": 6, "x": 12, "y": 0 },
+          "id": 3,
+          "options": { "colorMode": "value", "graphMode": "none", "justifyMode": "auto", "orientation": "auto", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "textMode": "auto" },
+          "targets": [{ "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "count(kube_pod_info{namespace=\"monitoring\"})", "refId": "A" }],
+          "title": "Monitoring Pods",
+          "type": "stat"
+        },
+        {
+          "gridPos": { "h": 4, "w": 6, "x": 18, "y": 0 },
+          "id": 4,
+          "options": { "colorMode": "value", "graphMode": "none", "justifyMode": "auto", "orientation": "auto", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "textMode": "auto" },
+          "targets": [{ "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "sum(kube_pod_container_status_restarts_total{namespace=\"5g\"})", "refId": "A" }],
+          "title": "Total Restarts (5G)",
+          "type": "stat"
+        },
+        {
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 4 },
+          "id": 5,
+          "options": { "legend": { "calcs": [], "displayMode": "list", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "single", "sort": "none" } },
+          "targets": [{ "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "100 - (avg by(instance) (irate(node_cpu_seconds_total{mode=\"idle\"}[5m])) * 100)", "legendFormat": "{{ "{{instance}}" }}", "refId": "A" }],
+          "title": "Node CPU Usage %",
+          "type": "timeseries"
+        },
+        {
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 4 },
+          "id": 6,
+          "options": { "legend": { "calcs": [], "displayMode": "list", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "single", "sort": "none" } },
+          "targets": [{ "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "(1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) * 100", "legendFormat": "{{ "{{instance}}" }}", "refId": "A" }],
+          "title": "Node Memory Usage %",
+          "type": "timeseries"
+        }
+      ],
+      "refresh": "10s",
+      "schemaVersion": 38,
+      "style": "dark",
+      "tags": ["kubernetes", "5g"],
+      "templating": { "list": [] },
+      "time": { "from": "now-1h", "to": "now" },
+      "timepicker": {},
+      "timezone": "",
+      "title": "Cluster Overview",
+      "uid": "cluster-overview",
+      "version": 1,
+      "weekStart": ""
+    }
+  
+  fiveg-core.json: |
+    {
+      "annotations": { "list": [] },
+      "editable": true,
+      "fiscalYearStartMonth": 0,
+      "graphTooltip": 0,
+      "id": null,
+      "links": [],
+      "liveNow": false,
+      "panels": [
+        {
+          "gridPos": { "h": 3, "w": 3, "x": 0, "y": 0 },
+          "id": 1,
+          "options": { "colorMode": "background", "graphMode": "none", "justifyMode": "auto", "orientation": "auto", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "textMode": "auto" },
+          "targets": [{ "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "kube_deployment_status_replicas_available{namespace=\"5g\", deployment=\"amf\"}", "refId": "A" }],
+          "title": "AMF",
+          "type": "stat",
+          "fieldConfig": { "defaults": { "mappings": [{"type": "value", "options": {"1": {"text": "Running", "color": "green"}, "0": {"text": "Down", "color": "red"}}}], "thresholds": { "mode": "absolute", "steps": [{"color": "red", "value": null}, {"color": "green", "value": 1}]} } }
+        },
+        {
+          "gridPos": { "h": 3, "w": 3, "x": 3, "y": 0 },
+          "id": 2,
+          "options": { "colorMode": "background", "graphMode": "none", "justifyMode": "auto", "orientation": "auto", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "textMode": "auto" },
+          "targets": [{ "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "kube_deployment_status_replicas_available{namespace=\"5g\", deployment=\"smf\"}", "refId": "A" }],
+          "title": "SMF",
+          "type": "stat",
+          "fieldConfig": { "defaults": { "mappings": [{"type": "value", "options": {"1": {"text": "Running", "color": "green"}, "0": {"text": "Down", "color": "red"}}}], "thresholds": { "mode": "absolute", "steps": [{"color": "red", "value": null}, {"color": "green", "value": 1}]} } }
+        },
+        {
+          "gridPos": { "h": 3, "w": 3, "x": 6, "y": 0 },
+          "id": 3,
+          "options": { "colorMode": "background", "graphMode": "none", "justifyMode": "auto", "orientation": "auto", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "textMode": "auto" },
+          "targets": [{ "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "sum(kube_deployment_status_replicas_available{namespace=\"5g\", deployment=~\"upf.*\"})", "refId": "A" }],
+          "title": "UPF",
+          "type": "stat",
+          "fieldConfig": { "defaults": { "mappings": [{"type": "value", "options": {"0": {"text": "Down", "color": "red"}}}], "thresholds": { "mode": "absolute", "steps": [{"color": "red", "value": null}, {"color": "green", "value": 1}]} } }
+        },
+        {
+          "gridPos": { "h": 3, "w": 3, "x": 9, "y": 0 },
+          "id": 4,
+          "options": { "colorMode": "background", "graphMode": "none", "justifyMode": "auto", "orientation": "auto", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "textMode": "auto" },
+          "targets": [{ "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "kube_deployment_status_replicas_available{namespace=\"5g\", deployment=\"nrf\"}", "refId": "A" }],
+          "title": "NRF",
+          "type": "stat",
+          "fieldConfig": { "defaults": { "mappings": [{"type": "value", "options": {"1": {"text": "Running", "color": "green"}, "0": {"text": "Down", "color": "red"}}}], "thresholds": { "mode": "absolute", "steps": [{"color": "red", "value": null}, {"color": "green", "value": 1}]} } }
+        },
+        {
+          "gridPos": { "h": 3, "w": 3, "x": 12, "y": 0 },
+          "id": 5,
+          "options": { "colorMode": "background", "graphMode": "none", "justifyMode": "auto", "orientation": "auto", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "textMode": "auto" },
+          "targets": [{ "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "kube_deployment_status_replicas_available{namespace=\"5g\", deployment=\"ausf\"}", "refId": "A" }],
+          "title": "AUSF",
+          "type": "stat",
+          "fieldConfig": { "defaults": { "mappings": [{"type": "value", "options": {"1": {"text": "Running", "color": "green"}, "0": {"text": "Down", "color": "red"}}}], "thresholds": { "mode": "absolute", "steps": [{"color": "red", "value": null}, {"color": "green", "value": 1}]} } }
+        },
+        {
+          "gridPos": { "h": 3, "w": 3, "x": 15, "y": 0 },
+          "id": 6,
+          "options": { "colorMode": "background", "graphMode": "none", "justifyMode": "auto", "orientation": "auto", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "textMode": "auto" },
+          "targets": [{ "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "kube_deployment_status_replicas_available{namespace=\"5g\", deployment=\"udm\"}", "refId": "A" }],
+          "title": "UDM",
+          "type": "stat",
+          "fieldConfig": { "defaults": { "mappings": [{"type": "value", "options": {"1": {"text": "Running", "color": "green"}, "0": {"text": "Down", "color": "red"}}}], "thresholds": { "mode": "absolute", "steps": [{"color": "red", "value": null}, {"color": "green", "value": 1}]} } }
+        },
+        {
+          "gridPos": { "h": 3, "w": 3, "x": 18, "y": 0 },
+          "id": 7,
+          "options": { "colorMode": "background", "graphMode": "none", "justifyMode": "auto", "orientation": "auto", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "textMode": "auto" },
+          "targets": [{ "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "kube_deployment_status_replicas_available{namespace=\"5g\", deployment=\"udr\"}", "refId": "A" }],
+          "title": "UDR",
+          "type": "stat",
+          "fieldConfig": { "defaults": { "mappings": [{"type": "value", "options": {"1": {"text": "Running", "color": "green"}, "0": {"text": "Down", "color": "red"}}}], "thresholds": { "mode": "absolute", "steps": [{"color": "red", "value": null}, {"color": "green", "value": 1}]} } }
+        },
+        {
+          "gridPos": { "h": 3, "w": 3, "x": 21, "y": 0 },
+          "id": 8,
+          "options": { "colorMode": "background", "graphMode": "none", "justifyMode": "auto", "orientation": "auto", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "textMode": "auto" },
+          "targets": [{ "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "kube_deployment_status_replicas_available{namespace=\"5g\", deployment=\"mongodb\"}", "refId": "A" }],
+          "title": "MongoDB",
+          "type": "stat",
+          "fieldConfig": { "defaults": { "mappings": [{"type": "value", "options": {"1": {"text": "Running", "color": "green"}, "0": {"text": "Down", "color": "red"}}}], "thresholds": { "mode": "absolute", "steps": [{"color": "red", "value": null}, {"color": "green", "value": 1}]} } }
+        },
+        {
+          "gridPos": { "h": 3, "w": 6, "x": 0, "y": 3 },
+          "id": 9,
+          "options": { "colorMode": "background", "graphMode": "none", "justifyMode": "auto", "orientation": "auto", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "textMode": "auto" },
+          "targets": [{ "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "kube_deployment_status_replicas_available{namespace=\"5g\", deployment=~\"gnb-[0-9]+\"}", "refId": "A" }],
+          "title": "gNB",
+          "type": "stat",
+          "fieldConfig": { "defaults": { "mappings": [{"type": "value", "options": {"1": {"text": "Running", "color": "green"}, "0": {"text": "Down", "color": "red"}}}], "thresholds": { "mode": "absolute", "steps": [{"color": "red", "value": null}, {"color": "green", "value": 1}]} } }
+        },
+        {
+          "gridPos": { "h": 3, "w": 6, "x": 6, "y": 3 },
+          "id": 10,
+          "options": { "colorMode": "value", "graphMode": "none", "justifyMode": "auto", "orientation": "auto", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "textMode": "auto" },
+          "targets": [{ "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "kube_statefulset_status_replicas_ready{namespace=\"5g\", statefulset=~\"ue-c.*\"}", "refId": "A" }],
+          "title": "UEs Ready",
+          "type": "stat",
+          "fieldConfig": { "defaults": { "thresholds": { "mode": "absolute", "steps": [{"color": "red", "value": null}, {"color": "yellow", "value": 1}, {"color": "green", "value": 2}]} } }
+        },
+        {
+          "gridPos": { "h": 3, "w": 6, "x": 12, "y": 3 },
+          "id": 11,
+          "options": { "colorMode": "background", "graphMode": "none", "justifyMode": "auto", "orientation": "auto", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "textMode": "auto" },
+          "targets": [{ "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "kube_deployment_status_replicas_available{namespace=\"5g\", deployment=\"pcf\"}", "refId": "A" }],
+          "title": "PCF",
+          "type": "stat",
+          "fieldConfig": { "defaults": { "mappings": [{"type": "value", "options": {"1": {"text": "Running", "color": "green"}, "0": {"text": "Down", "color": "red"}}}], "thresholds": { "mode": "absolute", "steps": [{"color": "red", "value": null}, {"color": "green", "value": 1}]} } }
+        },
+        {
+          "gridPos": { "h": 3, "w": 6, "x": 18, "y": 3 },
+          "id": 12,
+          "options": { "colorMode": "background", "graphMode": "none", "justifyMode": "auto", "orientation": "auto", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "textMode": "auto" },
+          "targets": [{ "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "kube_deployment_status_replicas_available{namespace=\"5g\", deployment=\"bsf\"}", "refId": "A" }],
+          "title": "BSF",
+          "type": "stat",
+          "fieldConfig": { "defaults": { "mappings": [{"type": "value", "options": {"1": {"text": "Running", "color": "green"}, "0": {"text": "Down", "color": "red"}}}], "thresholds": { "mode": "absolute", "steps": [{"color": "red", "value": null}, {"color": "green", "value": 1}]} } }
+        },
+        {
+          "gridPos": { "h": 6, "w": 12, "x": 0, "y": 6 },
+          "id": 13,
+          "options": { "legend": { "calcs": [], "displayMode": "list", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "single", "sort": "none" } },
+          "targets": [{ "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "sum by(pod) (rate(container_cpu_usage_seconds_total{namespace=\"5g\", container!=\"\", pod!~\".*sync.*\"}[5m]))", "legendFormat": "{{ "{{pod}}" }}", "refId": "A" }],
+          "title": "5G Core CPU Usage",
+          "type": "timeseries"
+        },
+        {
+          "gridPos": { "h": 6, "w": 12, "x": 12, "y": 6 },
+          "id": 14,
+          "options": { "legend": { "calcs": [], "displayMode": "list", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "single", "sort": "none" } },
+          "targets": [{ "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "sum by(pod) (container_memory_usage_bytes{namespace=\"5g\", container!=\"\", pod!~\".*sync.*\"}) / 1024 / 1024", "legendFormat": "{{ "{{pod}}" }}", "refId": "A" }],
+          "title": "5G Core Memory Usage (MB)",
+          "type": "timeseries"
+        },
+        {
+          "collapsed": false,
+          "gridPos": { "h": 1, "w": 24, "x": 0, "y": 12 },
+          "id": 100,
+          "panels": [],
+          "title": "Errors & Warnings",
+          "type": "row"
+        },
+        {
+          "gridPos": { "h": 6, "w": 24, "x": 0, "y": 13 },
+          "id": 15,
+          "fieldConfig": { "defaults": {}, "overrides": [] },
+          "options": { "dedupStrategy": "none", "enableLogDetails": true, "prettifyLogMessage": false, "showCommonLabels": false, "showLabels": true, "showTime": true, "sortOrder": "Descending", "wrapLogMessage": false },
+          "targets": [{ "datasource": { "type": "loki", "uid": "loki" }, "editorMode": "code", "expr": "{namespace=\"5g\"}", "queryType": "range", "refId": "A" }],
+          "title": "All 5G Logs",
+          "type": "logs"
+        },
+        {
+          "collapsed": true,
+          "gridPos": { "h": 1, "w": 24, "x": 0, "y": 19 },
+          "id": 101,
+          "panels": [
+            {
+              "gridPos": { "h": 6, "w": 24, "x": 0, "y": 20 },
+              "id": 16,
+              "options": { "dedupStrategy": "none", "enableLogDetails": true, "prettifyLogMessage": false, "showCommonLabels": false, "showLabels": false, "showTime": true, "sortOrder": "Descending", "wrapLogMessage": false },
+              "targets": [{ "datasource": { "type": "loki", "uid": "loki" }, "expr": "{namespace=\"5g\", pod=~\"amf.*\"}", "queryType": "range", "maxLines": 500, "refId": "A" }],
+              "title": "AMF Logs",
+              "type": "logs"
+            }
+          ],
+          "title": "AMF Logs",
+          "type": "row"
+        },
+        {
+          "collapsed": true,
+          "gridPos": { "h": 1, "w": 24, "x": 0, "y": 20 },
+          "id": 102,
+          "panels": [
+            {
+              "gridPos": { "h": 6, "w": 24, "x": 0, "y": 21 },
+              "id": 17,
+              "options": { "dedupStrategy": "none", "enableLogDetails": true, "prettifyLogMessage": false, "showCommonLabels": false, "showLabels": false, "showTime": true, "sortOrder": "Descending", "wrapLogMessage": false },
+              "targets": [{ "datasource": { "type": "loki", "uid": "loki" }, "expr": "{namespace=\"5g\", pod=~\"smf.*\"}", "queryType": "range", "maxLines": 500, "refId": "A" }],
+              "title": "SMF Logs",
+              "type": "logs"
+            }
+          ],
+          "title": "SMF Logs",
+          "type": "row"
+        },
+        {
+          "collapsed": true,
+          "gridPos": { "h": 1, "w": 24, "x": 0, "y": 21 },
+          "id": 103,
+          "panels": [
+            {
+              "gridPos": { "h": 6, "w": 24, "x": 0, "y": 22 },
+              "id": 18,
+              "options": { "dedupStrategy": "none", "enableLogDetails": true, "prettifyLogMessage": false, "showCommonLabels": false, "showLabels": false, "showTime": true, "sortOrder": "Descending", "wrapLogMessage": false },
+              "targets": [{ "datasource": { "type": "loki", "uid": "loki" }, "expr": "{namespace=\"5g\", pod=~\"upf.*\"}", "queryType": "range", "maxLines": 500, "refId": "A" }],
+              "title": "UPF Logs",
+              "type": "logs"
+            }
+          ],
+          "title": "UPF Logs",
+          "type": "row"
+        },
+        {
+          "collapsed": true,
+          "gridPos": { "h": 1, "w": 24, "x": 0, "y": 22 },
+          "id": 104,
+          "panels": [
+            {
+              "gridPos": { "h": 6, "w": 24, "x": 0, "y": 23 },
+              "id": 19,
+              "options": { "dedupStrategy": "none", "enableLogDetails": true, "prettifyLogMessage": false, "showCommonLabels": false, "showLabels": false, "showTime": true, "sortOrder": "Descending", "wrapLogMessage": false },
+              "targets": [{ "datasource": { "type": "loki", "uid": "loki" }, "expr": "{namespace=\"5g\", pod=~\"gnb-[0-9].*\"}", "queryType": "range", "maxLines": 500, "refId": "A" }],
+              "title": "gNB Logs",
+              "type": "logs"
+            }
+          ],
+          "title": "gNB Logs",
+          "type": "row"
+        },
+        {
+          "collapsed": true,
+          "gridPos": { "h": 1, "w": 24, "x": 0, "y": 23 },
+          "id": 105,
+          "panels": [
+            {
+              "gridPos": { "h": 6, "w": 24, "x": 0, "y": 24 },
+              "id": 20,
+              "options": { "dedupStrategy": "none", "enableLogDetails": true, "prettifyLogMessage": false, "showCommonLabels": false, "showLabels": false, "showTime": true, "sortOrder": "Descending", "wrapLogMessage": false },
+              "targets": [{ "datasource": { "type": "loki", "uid": "loki" }, "expr": "{namespace=\"5g\", pod=~\"ue-.*\"}", "queryType": "range", "maxLines": 500, "refId": "A" }],
+              "title": "UE Logs",
+              "type": "logs"
+            }
+          ],
+          "title": "UE Logs",
+          "type": "row"
+        }
+      ],
+      "refresh": "10s",
+      "schemaVersion": 38,
+      "style": "dark",
+      "tags": ["5g", "open5gs"],
+      "templating": { "list": [] },
+      "time": { "from": "now-1h", "to": "now" },
+      "timepicker": {},
+      "timezone": "",
+      "title": "5G Core",
+      "uid": "fiveg-core",
+      "version": 3,
+      "weekStart": ""
+    }

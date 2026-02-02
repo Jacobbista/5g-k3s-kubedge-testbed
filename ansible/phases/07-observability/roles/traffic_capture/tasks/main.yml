@@ -1,0 +1,37 @@
+# Deploy Traffic Capture DaemonSet
+---
+- name: Create capture directory on nodes
+  ansible.builtin.file:
+    path: "{{ traffic_capture.capture_path }}"
+    state: directory
+    mode: '0755'
+  delegate_to: "{{ item }}"
+  with_items:
+    - worker
+    - edge
+
+- name: Deploy Traffic Capture DaemonSet
+  kubernetes.core.k8s:
+    kubeconfig: "{{ kubeconfig_path }}"
+    state: present
+    definition: "{{ lookup('template', 'traffic-capture-daemonset.yaml.j2') | from_yaml }}"
+
+- name: Display capture info
+  ansible.builtin.debug:
+    msg: |
+      ========================================
+      Traffic Capture enabled!
+      
+      PCAP files location:
+        Worker: 192.168.56.11:{{ traffic_capture.capture_path }}
+        Edge:   192.168.56.12:{{ traffic_capture.capture_path }}
+      
+      Captured protocols:
+        - SCTP/38412 (NGAP - N2)
+        - UDP/2152  (GTP-U - N3)
+        - UDP/8805  (PFCP - N4)
+      
+      To download captures:
+        vagrant ssh worker -c "ls {{ traffic_capture.capture_path }}"
+        vagrant scp worker:{{ traffic_capture.capture_path }}/*.pcap ./
+      ========================================

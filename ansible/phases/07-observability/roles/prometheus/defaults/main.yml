@@ -1,0 +1,10 @@
+# Prometheus defaults
+---
+monitoring_namespace: monitoring
+
+prometheus:
+  image: prom/prometheus:v2.48.1
+  port: 9090
+  nodeport: 30090
+  retention: 15d
+  storage_size: 10Gi

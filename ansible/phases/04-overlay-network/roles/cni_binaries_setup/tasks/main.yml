@@ -49,6 +49,13 @@
     mode: "0755"
     remote_src: yes
 
+- name: Install macvlan plugin (for physical RAN integration)
+  copy:
+    src: /tmp/cni-extract/macvlan
+    dest: "{{ cni_download_dir }}/macvlan"
+    mode: "0755"
+    remote_src: yes
+
 - name: Create k3s symlinks
   when: is_k3s_node | bool
   file:
@@ -60,6 +67,7 @@
     - whereabouts
     - ovs
     - static
+    - macvlan
 
 - name: Download standard CNI plugins for edge
   when: not (is_k3s_node | bool)

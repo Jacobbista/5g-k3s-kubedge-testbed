@@ -91,17 +91,18 @@ test_n6e_enabled: false
 test_n6c_enabled: false
 
 # Physical RAN Integration (for femtocell/small cell connectivity)
-# See docs/physical-ran-integration.md for details
+# See docs/deployment/physical-ran.md for details
 #
-# ran_bridge_mode options:
-#   - disabled: No physical RAN bridging (default, use UERANSIM)
-#   - n2_only:  Bridge to N2 network only (control plane for NGAP/SCTP)
-#   - n3_only:  Bridge to N3 network only (user plane for GTP-U)
-#   - n2_n3:    Bridge to both N2 and N3 (full connectivity)
+# physical_ran_enabled: Enable/disable physical RAN connectivity
+# physical_ran_interface: Host interface bridged to physical RAN (e.g., enp0s9)
+# physical_ran_subnet: Subnet of the physical RAN network
+# amf_physical_ran_ip: IP address for AMF on the physical RAN network
+#                      (this is the IP the gNB connects to for NGAP/SCTP)
 #
-# ran_interface: Physical interface to bridge (auto-detected if empty)
-#                Usually enp0s9 or eth2 on worker VM
-ran_bridge_mode: disabled
-ran_interface: ""
+physical_ran_enabled: true
+physical_ran_interface: "enp0s9"
+physical_ran_subnet: "192.168.5.0/24"
+# AMF's IP on the physical RAN network (gNB connects here)
+amf_physical_ran_ip: "192.168.5.150"
 
 # Phase 6 topology variables moved to ansible/phases/06-ueransim-mec/vars/topology.yml

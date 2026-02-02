@@ -1,0 +1,12 @@
+# Traffic Capture defaults
+---
+monitoring_namespace: monitoring
+
+traffic_capture:
+  image: linuxserver/wireshark:latest
+  capture_path: /var/log/5g-captures
+  # Capture filters: SCTP (NGAP), GTP-U, PFCP
+  filter: "sctp port 38412 or udp port 2152 or udp port 8805"
+  # Rotate every hour, keep 24 files
+  rotation_duration: 3600
+  max_files: 24

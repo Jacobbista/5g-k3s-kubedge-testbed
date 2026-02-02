@@ -1,0 +1,38 @@
+# Deploy Prometheus
+---
+- name: Create Prometheus ConfigMap
+  kubernetes.core.k8s:
+    kubeconfig: "{{ kubeconfig_path }}"
+    state: present
+    definition: "{{ lookup('template', 'prometheus-config.yaml.j2') | from_yaml }}"
+
+- name: Create Prometheus RBAC
+  kubernetes.core.k8s:
+    kubeconfig: "{{ kubeconfig_path }}"
+    state: present
+    definition: "{{ lookup('template', 'prometheus-rbac.yaml.j2') | from_yaml_all | list }}"
+
+- name: Deploy Prometheus
+  kubernetes.core.k8s:
+    kubeconfig: "{{ kubeconfig_path }}"
+    state: present
+    definition: "{{ lookup('template', 'prometheus-deployment.yaml.j2') | from_yaml }}"
+
+- name: Create Prometheus Service
+  kubernetes.core.k8s:
+    kubeconfig: "{{ kubeconfig_path }}"
+    state: present
+    definition: "{{ lookup('template', 'prometheus-service.yaml.j2') | from_yaml }}"
+
+- name: Wait for Prometheus to be ready
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ kubeconfig_path }}"
+    kind: Deployment
+    name: prometheus
+    namespace: "{{ monitoring_namespace }}"
+  register: prometheus_deployment
+  until: >
+    prometheus_deployment.resources | length > 0 and
+    prometheus_deployment.resources[0].status.readyReplicas | default(0) > 0
+  retries: 12
+  delay: 5

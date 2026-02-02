@@ -23,9 +23,15 @@ Vagrant.configure("2") do |config|
   }
 
   # Secondary network for physical RAN connection (worker only)
-  # This network is bridged to OVS for N2/N3 traffic isolation
+  # Bridged to host physical NIC for femtocell / external gNB connectivity
+  # Set PHYSICAL_RAN_BRIDGE env var to your NIC name, or edit below
+  # NOTE: Worker gets .1 (bridge role), AMF pod gets .150 via macvlan NAD
   ran_network = {
-    "worker" => { ip: "192.168.57.1", netmask: "255.255.255.0" }
+    "worker" => { 
+      ip: "192.168.5.1", 
+      netmask: "255.255.255.0", 
+      bridge: ENV['PHYSICAL_RAN_BRIDGE'] || "enx00e04c6817b7"
+    }
   }
 
   nodes.each do |name, spec|
@@ -34,12 +40,13 @@ Vagrant.configure("2") do |config|
       m.vm.network "private_network", ip: spec[:ip]
       m.vm.box = spec[:box]
       
-      # Add secondary RAN network interface for worker (for physical femtocell)
+      # Add bridged RAN network interface for worker (for physical femtocell)
       if ran_network.key?(name)
-        m.vm.network "private_network", 
+        m.vm.network "public_network", 
           ip: ran_network[name][:ip],
           netmask: ran_network[name][:netmask],
-          virtualbox__intnet: "5g-ran-network"
+          bridge: ran_network[name][:bridge],
+          use_dhcp_assigned_default_route: false
       end
 
       m.vm.provider "virtualbox" do |vb|
@@ -51,6 +58,18 @@ Vagrant.configure("2") do |config|
         if ran_network.key?(name)
           vb.customize ["modifyvm", :id, "--nicpromisc3", "allow-all"]
         end
+      end
+
+      # Enable promiscuous mode on RAN interface for macvlan to work properly
+      if ran_network.key?(name)
+        m.vm.provision "shell", run: "always", inline: <<-SHELL
+          # Get the interface name for the bridged network (usually enp0s9)
+          RAN_IF="enp0s9"
+          if ip link show "$RAN_IF" >/dev/null 2>&1; then
+            ip link set "$RAN_IF" promisc on
+            echo "Enabled promiscuous mode on $RAN_IF for macvlan"
+          fi
+        SHELL
       end
 
       if name != "ansible"

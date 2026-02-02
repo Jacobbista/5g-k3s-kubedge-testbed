@@ -1,0 +1,33 @@
+# Deploy Node Exporter and Kube State Metrics
+---
+- name: Deploy Node Exporter DaemonSet
+  kubernetes.core.k8s:
+    kubeconfig: "{{ kubeconfig_path }}"
+    state: present
+    definition: "{{ lookup('template', 'node-exporter-daemonset.yaml.j2') | from_yaml }}"
+
+- name: Deploy Node Exporter Service
+  kubernetes.core.k8s:
+    kubeconfig: "{{ kubeconfig_path }}"
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Service
+      metadata:
+        name: node-exporter
+        namespace: "{{ monitoring_namespace }}"
+        labels:
+          app: node-exporter
+      spec:
+        selector:
+          app: node-exporter
+        ports:
+          - port: 9100
+            targetPort: 9100
+        clusterIP: None
+
+- name: Deploy Kube State Metrics
+  kubernetes.core.k8s:
+    kubeconfig: "{{ kubeconfig_path }}"
+    state: present
+    definition: "{{ lookup('template', 'kube-state-metrics.yaml.j2') | from_yaml_all | list }}"

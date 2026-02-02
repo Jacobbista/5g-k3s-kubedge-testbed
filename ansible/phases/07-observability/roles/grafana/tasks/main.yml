@@ -1,0 +1,55 @@
+# Deploy Grafana
+---
+- name: Create Grafana datasources ConfigMap
+  kubernetes.core.k8s:
+    kubeconfig: "{{ kubeconfig_path }}"
+    state: present
+    definition: "{{ lookup('template', 'grafana-datasources.yaml.j2') | from_yaml }}"
+
+- name: Create Grafana dashboards ConfigMap
+  kubernetes.core.k8s:
+    kubeconfig: "{{ kubeconfig_path }}"
+    state: present
+    definition: "{{ lookup('template', 'grafana-dashboards-configmap.yaml.j2') | from_yaml }}"
+
+- name: Create Grafana dashboard provisioning ConfigMap
+  kubernetes.core.k8s:
+    kubeconfig: "{{ kubeconfig_path }}"
+    state: present
+    definition: "{{ lookup('template', 'grafana-dashboard-provider.yaml.j2') | from_yaml }}"
+
+- name: Deploy Grafana
+  kubernetes.core.k8s:
+    kubeconfig: "{{ kubeconfig_path }}"
+    state: present
+    definition: "{{ lookup('template', 'grafana-deployment.yaml.j2') | from_yaml }}"
+
+- name: Create Grafana Service
+  kubernetes.core.k8s:
+    kubeconfig: "{{ kubeconfig_path }}"
+    state: present
+    definition: "{{ lookup('template', 'grafana-service.yaml.j2') | from_yaml }}"
+
+- name: Wait for Grafana to be ready
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ kubeconfig_path }}"
+    kind: Deployment
+    name: grafana
+    namespace: "{{ monitoring_namespace }}"
+  register: grafana_deployment
+  until: >
+    grafana_deployment.resources | length > 0 and
+    grafana_deployment.resources[0].status.readyReplicas | default(0) > 0
+  retries: 18
+  delay: 5
+
+- name: Display Grafana access info
+  ansible.builtin.debug:
+    msg: |
+      ========================================
+      Grafana is ready!
+      
+      URL: http://192.168.56.11:{{ grafana.nodeport }}
+      Username: {{ grafana.admin_user }}
+      Password: {{ grafana.admin_password }}
+      ========================================

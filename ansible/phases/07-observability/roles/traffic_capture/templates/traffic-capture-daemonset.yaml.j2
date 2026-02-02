@@ -1,0 +1,61 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: traffic-capture
+  namespace: {{ monitoring_namespace }}
+  labels:
+    app: traffic-capture
+spec:
+  selector:
+    matchLabels:
+      app: traffic-capture
+  template:
+    metadata:
+      labels:
+        app: traffic-capture
+    spec:
+      hostNetwork: true
+      nodeSelector:
+        kubernetes.io/os: linux
+      tolerations:
+        - operator: Exists
+      containers:
+        - name: tshark
+          image: {{ traffic_capture.image }}
+          securityContext:
+            capabilities:
+              add:
+                - NET_ADMIN
+                - NET_RAW
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              echo "Starting 5G traffic capture..."
+              echo "Filter: {{ traffic_capture.filter }}"
+              echo "Output: {{ traffic_capture.capture_path }}"
+              
+              # Create output directory if needed
+              mkdir -p {{ traffic_capture.capture_path }}
+              
+              # Capture with rotation
+              tshark -i any \
+                -f "{{ traffic_capture.filter }}" \
+                -w {{ traffic_capture.capture_path }}/5g-$(hostname)-$(date +%Y%m%d).pcap \
+                -b duration:{{ traffic_capture.rotation_duration }} \
+                -b files:{{ traffic_capture.max_files }} \
+                2>&1
+          volumeMounts:
+            - name: capture-data
+              mountPath: {{ traffic_capture.capture_path }}
+          resources:
+            limits:
+              cpu: 200m
+              memory: 256Mi
+            requests:
+              cpu: 100m
+              memory: 128Mi
+      volumes:
+        - name: capture-data
+          hostPath:
+            path: {{ traffic_capture.capture_path }}
+            type: DirectoryOrCreate

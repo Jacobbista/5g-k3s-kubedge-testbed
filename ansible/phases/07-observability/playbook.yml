@@ -1,0 +1,54 @@
+# Phase 07: Observability Stack
+# Deploys Prometheus, Loki, Grafana for monitoring and logging
+---
+- name: Deploy Observability Stack
+  hosts: master
+  gather_facts: true
+  vars:
+    monitoring_namespace: monitoring
+    grafana_nodeport: 30300
+    prometheus_nodeport: 30090
+    
+  tasks:
+    - name: Create monitoring namespace
+      kubernetes.core.k8s:
+        kubeconfig: "{{ kubeconfig_path }}"
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Namespace
+          metadata:
+            name: "{{ monitoring_namespace }}"
+            labels:
+              name: monitoring
+
+- name: Deploy Prometheus Stack
+  hosts: master
+  gather_facts: false
+  roles:
+    - role: exporters
+      tags: [exporters, prometheus]
+    - role: prometheus
+      tags: [prometheus]
+
+- name: Deploy Loki Stack
+  hosts: master
+  gather_facts: false
+  roles:
+    - role: loki
+      tags: [loki, logs]
+
+- name: Deploy Grafana
+  hosts: master
+  gather_facts: false
+  roles:
+    - role: grafana
+      tags: [grafana, ui]
+
+- name: Deploy Traffic Capture (optional)
+  hosts: master
+  gather_facts: false
+  roles:
+    - role: traffic_capture
+      tags: [traffic, capture]
+      when: deploy_traffic_capture | default(false)

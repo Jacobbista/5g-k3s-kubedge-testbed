@@ -12,8 +12,9 @@ The testbed is deployed in six sequential phases, each building on the previous.
 | 4 | Overlay Network | ~3 min | Multus, OVS bridges, VXLAN |
 | 5 | 5G Core | ~5 min | Open5GS network functions |
 | 6 | UERANSIM | ~3 min | gNB and UE simulators |
+| 7 | Observability | ~3 min | Prometheus, Loki, Grafana (optional) |
 
-**Total deployment time**: ~18 minutes
+**Total deployment time**: ~18-21 minutes
 
 ## Running Phases
 
@@ -216,6 +217,55 @@ kubectl get pods -n 5g -l app=ue
 
 # Check AMF logs for registrations
 kubectl logs -n 5g deploy/amf -c amf | grep -i "registered"
+```
+
+---
+
+## Phase 7: Observability Stack (Optional)
+
+**Purpose**: Deploy monitoring and logging infrastructure.
+
+**Components**:
+- Prometheus (metrics collection)
+- Loki (log aggregation)
+- Grafana (visualization)
+- Node Exporter (node metrics)
+- Promtail (log shipping)
+- Traffic Capture (optional, PCAP)
+
+### Deploy
+
+```bash
+vagrant ssh ansible
+cd ~/ansible-ro
+
+# Deploy observability stack
+ansible-playbook phases/07-observability/playbook.yml -i inventory.ini
+
+# With traffic capture enabled
+ansible-playbook phases/07-observability/playbook.yml -i inventory.ini -e deploy_traffic_capture=true
+```
+
+### Access
+
+| Service | URL | Credentials |
+|---------|-----|-------------|
+| Grafana | http://192.168.56.11:30300 | admin / admin5g |
+| Prometheus | http://192.168.56.11:30090 | - |
+
+### Pre-built Dashboards
+
+- **Cluster Overview** - Node health, resource usage
+- **5G Core** - NF status, logs, metrics
+
+### Verify
+
+```bash
+# Check pods
+kubectl get pods -n monitoring
+
+# Check Grafana
+curl http://192.168.56.11:30300/api/health
 ```
 
 ---

@@ -471,6 +471,19 @@
           }}s
       when: phase6_t0 is defined
 
+# Phase 7 is optional - run separately with:
+# ansible-playbook phases/07-observability/playbook.yml
+- name: "PHASE 7: Observability Stack (Optional)"
+  import_playbook: 07-observability/playbook.yml
+  vars:
+    phase_name: "Observability Stack"
+    phase_number: 7
+  tags:
+    - phase7
+    - observability
+    - monitoring
+    - never  # Skip by default, run with --tags phase7
+
 - name: "🎉 DEPLOYMENT COMPLETED SUCCESSFULLY"
   hosts: localhost
   gather_facts: no
@@ -494,4 +507,7 @@
           ✅ Overlay Network (OVS + Multus)
           ✅ 5G Core Network Functions
           ✅ UERANSIM & MEC
+
+          Optional phases:
+          ℹ️  Observability Stack (run: ansible-playbook phases/07-observability/playbook.yml)
       when: deployment_t0 is defined and deployment_t1 is defined

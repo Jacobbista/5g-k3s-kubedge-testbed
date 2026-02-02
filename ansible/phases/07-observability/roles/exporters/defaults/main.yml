@@ -1,0 +1,11 @@
+# Exporters defaults
+---
+monitoring_namespace: monitoring
+
+node_exporter:
+  image: prom/node-exporter:v1.7.0
+  port: 9100
+
+kube_state_metrics:
+  image: registry.k8s.io/kube-state-metrics/kube-state-metrics:v2.10.1
+  port: 8080

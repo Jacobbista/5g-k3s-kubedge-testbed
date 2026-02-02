@@ -1,0 +1,64 @@
+# Deploy Loki and Promtail
+---
+- name: Create Loki ConfigMap
+  kubernetes.core.k8s:
+    kubeconfig: "{{ kubeconfig_path }}"
+    state: present
+    definition: "{{ lookup('template', 'loki-config.yaml.j2') | from_yaml }}"
+
+- name: Deploy Loki
+  kubernetes.core.k8s:
+    kubeconfig: "{{ kubeconfig_path }}"
+    state: present
+    definition: "{{ lookup('template', 'loki-deployment.yaml.j2') | from_yaml }}"
+
+- name: Create Loki Service
+  kubernetes.core.k8s:
+    kubeconfig: "{{ kubeconfig_path }}"
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Service
+      metadata:
+        name: loki
+        namespace: "{{ monitoring_namespace }}"
+        labels:
+          app: loki
+      spec:
+        selector:
+          app: loki
+        ports:
+          - port: 3100
+            targetPort: 3100
+            name: http
+
+- name: Wait for Loki to be ready
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ kubeconfig_path }}"
+    kind: Deployment
+    name: loki
+    namespace: "{{ monitoring_namespace }}"
+  register: loki_deployment
+  until: >
+    loki_deployment.resources | length > 0 and
+    loki_deployment.resources[0].status.readyReplicas | default(0) > 0
+  retries: 18
+  delay: 5
+
+- name: Create Promtail ConfigMap
+  kubernetes.core.k8s:
+    kubeconfig: "{{ kubeconfig_path }}"
+    state: present
+    definition: "{{ lookup('template', 'promtail-config.yaml.j2') | from_yaml }}"
+
+- name: Create Promtail RBAC
+  kubernetes.core.k8s:
+    kubeconfig: "{{ kubeconfig_path }}"
+    state: present
+    definition: "{{ lookup('template', 'promtail-rbac.yaml.j2') | from_yaml_all | list }}"
+
+- name: Deploy Promtail DaemonSet
+  kubernetes.core.k8s:
+    kubeconfig: "{{ kubeconfig_path }}"
+    state: present
+    definition: "{{ lookup('template', 'promtail-daemonset.yaml.j2') | from_yaml }}"

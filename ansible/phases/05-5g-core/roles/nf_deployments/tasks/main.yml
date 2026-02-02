@@ -34,6 +34,43 @@
     network_functions: "{{ network_functions_updated }}"
   run_once: true
 
+# Add physical RAN interface to AMF (for femtocell/small cell connectivity)
+# This gives AMF a dedicated macvlan interface on the physical RAN network
+# so physical gNBs can connect via NGAP/SCTP
+- name: Build physical RAN N2 network for AMF
+  set_fact:
+    amf_physical_ran_network:
+      - name: "n2-physical"
+        interface: "n2phy"
+        ips: ["{{ amf_physical_ran_ip }}/24"]
+  when: physical_ran_enabled | default(false) | bool
+  run_once: true
+
+- name: Update network_functions with AMF physical RAN interface
+  set_fact:
+    network_functions_with_physical: []
+  when: physical_ran_enabled | default(false) | bool
+  run_once: true
+
+- name: Add physical RAN interface to AMF networks
+  set_fact:
+    network_functions_with_physical: >-
+      {{ network_functions_with_physical + 
+         [item | combine({'networks': item.networks + amf_physical_ran_network})] 
+         if item.name == 'amf' 
+         else network_functions_with_physical + [item] }}
+  loop: "{{ network_functions }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when: physical_ran_enabled | default(false) | bool
+  run_once: true
+
+- name: Replace network_functions with physical RAN version
+  set_fact:
+    network_functions: "{{ network_functions_with_physical }}"
+  when: physical_ran_enabled | default(false) | bool
+  run_once: true
+
 - name: Deploy MongoDB
   kubernetes.core.k8s:
     state: present
