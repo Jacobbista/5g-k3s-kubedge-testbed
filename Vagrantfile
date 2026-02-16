@@ -60,16 +60,23 @@ Vagrant.configure("2") do |config|
         end
       end
 
+      # VM time sync with host (requires Guest Additions; reduces clock drift)
+      m.trigger.after [:up, :resume, :reload] do |t|
+        t.name = "Enable VM time sync (#{name})"
+        t.run = {
+          inline: "VBoxManage guestproperty set \"#{name}-5g-k8s-testbed\" \"/VirtualBox/GuestAdd/VBoxService/--timesync-interval\" \"10000\" 2>/dev/null || true"
+        }
+      end
+
       # Enable promiscuous mode on RAN interface for macvlan to work properly
+      # Uses trigger instead of provisioner to run on both 'up' and 'resume'
       if ran_network.key?(name)
-        m.vm.provision "shell", run: "always", inline: <<-SHELL
-          # Get the interface name for the bridged network (usually enp0s9)
-          RAN_IF="enp0s9"
-          if ip link show "$RAN_IF" >/dev/null 2>&1; then
-            ip link set "$RAN_IF" promisc on
-            echo "Enabled promiscuous mode on $RAN_IF for macvlan"
-          fi
-        SHELL
+        m.trigger.after [:up, :resume, :reload] do |t|
+          t.name = "Enable promiscuous mode on #{name}"
+          t.run = {
+            inline: "vagrant ssh #{name} -c 'sudo ip link set enp0s9 promisc on && echo Promiscuous mode enabled on enp0s9'"
+          }
+        end
       end
 
       if name != "ansible"
@@ -136,6 +143,12 @@ Vagrant.configure("2") do |config|
       # Add PATH to .bashrc for interactive sessions
       if ! grep -q 'export PATH=.*.local/bin' ~/.bashrc; then
         echo 'export PATH=$HOME/.local/bin:$PATH' >> ~/.bashrc
+      fi
+
+      # Ensure interactive sessions use writable Ansible config.
+      # This avoids ansible.cfg auto-discovery issues in world-writable synced folders.
+      if ! grep -q 'export ANSIBLE_CONFIG=/home/vagrant/ansible-work/ansible.cfg' ~/.bashrc; then
+        echo 'export ANSIBLE_CONFIG=/home/vagrant/ansible-work/ansible.cfg' >> ~/.bashrc
       fi
     SHELL
 

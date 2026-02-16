@@ -5,12 +5,29 @@
     state: present
     update_cache: yes
 
+- name: Set system timezone
+  ansible.builtin.timezone:
+    name: "{{ timezone_name }}"
+
+- name: Deploy chrony config (NTP sync for VMs)
+  ansible.builtin.template:
+    src: chrony.conf.j2
+    dest: /etc/chrony/chrony.conf
+    mode: "0644"
+  notify: restart chrony
+
 - name: Enable and start chrony
   ansible.builtin.systemd:
     name: chrony
     state: started
     enabled: true
   notify: restart chrony
+
+- name: Force immediate chrony step if offset is large
+  ansible.builtin.command: chronyc -a makestep
+  register: chrony_makestep
+  changed_when: "'System clock was stepped' in chrony_makestep.stdout"
+  failed_when: false
 
 - name: Install Open vSwitch on worker/edge
   ansible.builtin.apt:

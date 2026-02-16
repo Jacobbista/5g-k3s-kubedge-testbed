@@ -1,12 +1,225 @@
 ---
 # Deploy RBAC + CronJob to sync gNB Endpoints with Multus N2 IPs
 
+- name: Compute phase-6 gNB app names from topology
+  set_fact:
+    phase6_gnb_app_names: >-
+      {{
+        ueransim_topology.cells
+        | map(attribute='gnb')
+        | map(attribute='name')
+        | list
+      }}
+  run_once: true
+
+- name: Check running gNB pods by app label
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Pod
+    namespace: "{{ namespace }}"
+    label_selectors: ["app={{ item }}"]
+    field_selectors: ["status.phase=Running"]
+    kubeconfig: "{{ kubeconfig_path }}"
+  loop: "{{ phase6_gnb_app_names }}"
+  loop_control:
+    label: "{{ item }}"
+  register: phase6_running_gnb_pods
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+  when: phase6_gnb_app_names | length > 0
+
+- name: Compute active gNB count and endpoints sync decision
+  set_fact:
+    phase6_active_gnb_count: >-
+      {{
+        phase6_running_gnb_pods.results | default([])
+        | map(attribute='resources')
+        | map('length')
+        | sum
+      }}
+    endpoints_sync_should_run: >-
+      {{
+        (endpoints_sync_enabled | bool) and
+        ((phase6_running_gnb_pods.results | default([])
+          | map(attribute='resources')
+          | map('length')
+          | sum) > 0)
+      }}
+  run_once: true
+
+- name: Show endpoints sync decision
+  debug:
+    msg: >-
+      endpoints_sync_should_run={{ endpoints_sync_should_run }},
+      active_gnb_count={{ phase6_active_gnb_count | default(0) }},
+      gnb_apps={{ phase6_gnb_app_names | join(',') }}
+  run_once: true
+
+- name: Cleanup endpoints sync CronJob when disabled or no gNB active
+  kubernetes.core.k8s:
+    api_version: batch/v1
+    kind: CronJob
+    name: gnb-endpoints-sync
+    namespace: "{{ namespace }}"
+    state: absent
+    kubeconfig: "{{ kubeconfig_path }}"
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+  when:
+    - endpoints_sync_cleanup_when_disabled | bool
+    - not endpoints_sync_should_run
+
+- name: Get existing endpoints sync Jobs
+  kubernetes.core.k8s_info:
+    api_version: batch/v1
+    kind: Job
+    namespace: "{{ namespace }}"
+    kubeconfig: "{{ kubeconfig_path }}"
+  register: endpoints_sync_jobs
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+  when:
+    - endpoints_sync_cleanup_when_disabled | bool
+    - not endpoints_sync_should_run
+
+- name: Build stale endpoints sync Job list
+  set_fact:
+    stale_endpoints_sync_jobs: >-
+      {{
+        endpoints_sync_jobs.resources
+        | map(attribute='metadata.name')
+        | select('match', '^gnb-endpoints-sync-')
+        | list
+      }}
+  run_once: true
+  when:
+    - endpoints_sync_cleanup_when_disabled | bool
+    - not endpoints_sync_should_run
+
+- name: Delete stale endpoints sync Jobs
+  kubernetes.core.k8s:
+    api_version: batch/v1
+    kind: Job
+    name: "{{ item }}"
+    namespace: "{{ namespace }}"
+    state: absent
+    kubeconfig: "{{ kubeconfig_path }}"
+  loop: "{{ stale_endpoints_sync_jobs | default([]) }}"
+  loop_control:
+    label: "{{ item }}"
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+  when:
+    - endpoints_sync_cleanup_when_disabled | bool
+    - not endpoints_sync_should_run
+
+- name: Get existing endpoints sync Pods
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Pod
+    namespace: "{{ namespace }}"
+    kubeconfig: "{{ kubeconfig_path }}"
+  register: endpoints_sync_pods
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+  when:
+    - endpoints_sync_cleanup_when_disabled | bool
+    - not endpoints_sync_should_run
+
+- name: Build stale endpoints sync Pod list
+  set_fact:
+    stale_endpoints_sync_pods: >-
+      {{
+        endpoints_sync_pods.resources
+        | map(attribute='metadata.name')
+        | select('match', '^gnb-endpoints-sync-')
+        | list
+      }}
+  run_once: true
+  when:
+    - endpoints_sync_cleanup_when_disabled | bool
+    - not endpoints_sync_should_run
+
+- name: Delete stale endpoints sync Pods
+  kubernetes.core.k8s:
+    api_version: v1
+    kind: Pod
+    name: "{{ item }}"
+    namespace: "{{ namespace }}"
+    state: absent
+    kubeconfig: "{{ kubeconfig_path }}"
+  loop: "{{ stale_endpoints_sync_pods | default([]) }}"
+  loop_control:
+    label: "{{ item }}"
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+  when:
+    - endpoints_sync_cleanup_when_disabled | bool
+    - not endpoints_sync_should_run
+
+- name: Cleanup endpoints sync script ConfigMap when disabled
+  kubernetes.core.k8s:
+    api_version: v1
+    kind: ConfigMap
+    name: endpoints-sync-scripts
+    namespace: "{{ namespace }}"
+    state: absent
+    kubeconfig: "{{ kubeconfig_path }}"
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+  when:
+    - endpoints_sync_cleanup_when_disabled | bool
+    - not endpoints_sync_should_run
+
+- name: Cleanup endpoints sync RoleBinding when disabled
+  kubernetes.core.k8s:
+    api_version: rbac.authorization.k8s.io/v1
+    kind: RoleBinding
+    name: "{{ rbac_name }}"
+    namespace: "{{ namespace }}"
+    state: absent
+    kubeconfig: "{{ kubeconfig_path }}"
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+  when:
+    - endpoints_sync_cleanup_when_disabled | bool
+    - not endpoints_sync_should_run
+
+- name: Cleanup endpoints sync Role when disabled
+  kubernetes.core.k8s:
+    api_version: rbac.authorization.k8s.io/v1
+    kind: Role
+    name: "{{ rbac_name }}"
+    namespace: "{{ namespace }}"
+    state: absent
+    kubeconfig: "{{ kubeconfig_path }}"
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+  when:
+    - endpoints_sync_cleanup_when_disabled | bool
+    - not endpoints_sync_should_run
+
+- name: Cleanup endpoints sync ServiceAccount when disabled
+  kubernetes.core.k8s:
+    api_version: v1
+    kind: ServiceAccount
+    name: "{{ service_account_name }}"
+    namespace: "{{ namespace }}"
+    state: absent
+    kubeconfig: "{{ kubeconfig_path }}"
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+  when:
+    - endpoints_sync_cleanup_when_disabled | bool
+    - not endpoints_sync_should_run
+
 - name: Render RBAC manifest
   template:
     src: templates/rbac.yaml.j2
     dest: /tmp/endpoints-sync-rbac.yaml
   delegate_to: "{{ groups['masters'][0] }}"
   run_once: true
+  when: endpoints_sync_should_run
 
 - name: Apply RBAC
   kubernetes.core.k8s:
@@ -15,6 +228,7 @@
     kubeconfig: "{{ kubeconfig_path }}"
   delegate_to: "{{ groups['masters'][0] }}"
   run_once: true
+  when: endpoints_sync_should_run
 
 - name: Create scripts ConfigMap
   kubernetes.core.k8s:
@@ -30,6 +244,7 @@
         sync_endpoints.py: "{{ lookup('template', 'templates/sync_endpoints.py.j2') }}"
   delegate_to: "{{ groups['masters'][0] }}"
   run_once: true
+  when: endpoints_sync_should_run
 
 - name: Render CronJob manifest
   template:
@@ -37,6 +252,7 @@
     dest: /tmp/endpoints-sync-cronjob.yaml
   delegate_to: "{{ groups['masters'][0] }}"
   run_once: true
+  when: endpoints_sync_should_run
 
 - name: Apply CronJob
   kubernetes.core.k8s:
@@ -45,3 +261,4 @@
     kubeconfig: "{{ kubeconfig_path }}"
   delegate_to: "{{ groups['masters'][0] }}"
   run_once: true
+  when: endpoints_sync_should_run

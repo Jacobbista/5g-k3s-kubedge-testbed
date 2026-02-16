@@ -51,12 +51,32 @@
     running_pods_count: >-
       {{ core_pods.resources | selectattr('status.phase', 'equalto', 'Running') | list | length }}
 
+- name: Compute running core pods count (expected apps only)
+  set_fact:
+    running_core_pods: >-
+      {{
+        core_pods.resources
+        | selectattr('status.phase', 'equalto', 'Running')
+        | selectattr('metadata.labels.app', 'defined')
+        | selectattr('metadata.labels.app', 'in', (expected_pods.keys() | list))
+        | list
+      }}
+    running_core_pods_count: >-
+      {{
+        core_pods.resources
+        | selectattr('status.phase', 'equalto', 'Running')
+        | selectattr('metadata.labels.app', 'defined')
+        | selectattr('metadata.labels.app', 'in', (expected_pods.keys() | list))
+        | list
+        | length
+      }}
+
 - name: Assert minimum number of running pods
   assert:
     that:
-      - (running_pods_count | int) >= (expected_pods.values() | map('int') | sum)
-    fail_msg: "Not enough pods running: {{ running_pods_count }} / {{ expected_pods.values() | map('int') | sum }}"
-    success_msg: "All 5G Core pods running: {{ running_pods_count }} / {{ expected_pods.values() | map('int') | sum }}"
+      - (running_core_pods_count | int) >= (expected_pods.values() | map('int') | sum)
+    fail_msg: "Not enough core pods running: {{ running_core_pods_count }} / {{ expected_pods.values() | map('int') | sum }}"
+    success_msg: "All expected core pods running: {{ running_core_pods_count }} / {{ expected_pods.values() | map('int') | sum }}"
 
 - name: Get 5G Core services
   kubernetes.core.k8s_info:
@@ -72,8 +92,9 @@
   debug:
     msg:
       - "✅ 5G Core Network Functions Deployed"
-      - "📦 Pods Running: {{ running_pods_count }}"
+      - "📦 Pods Running (core only): {{ running_core_pods_count }}"
+      - "📦 Pods Running (all in namespace): {{ running_pods_count }}"
       - "🌐 Services: {{ core_services.resources | length }}"
       - ""
-      - "Pod List:"
-      - "{{ core_pods.resources | map(attribute='metadata.name') | list | join(', ') }}"
+      - "Core Pod List:"
+      - "{{ running_core_pods | map(attribute='metadata.name') | list | sort | join(', ') }}"

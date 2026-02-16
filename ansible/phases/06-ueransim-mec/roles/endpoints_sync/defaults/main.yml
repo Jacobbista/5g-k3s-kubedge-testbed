@@ -5,3 +5,8 @@ namespace: "5g"
 sync_schedule: "*/1 * * * *" # every minute
 service_account_name: "endpoints-sync"
 rbac_name: "endpoints-sync"
+cronjob_successful_jobs_history_limit: 1
+cronjob_failed_jobs_history_limit: 1
+cronjob_ttl_seconds_after_finished: 600
+endpoints_sync_enabled: true
+endpoints_sync_cleanup_when_disabled: true

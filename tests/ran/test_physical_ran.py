@@ -31,6 +31,7 @@ class PhysicalRANTestSuite:
         
         tests = [
             ("OVS Bridge Configuration", self.test_ovs_bridge_config),
+            ("Overlay Gateway Ownership", self.test_overlay_gateway_ownership),
             ("RAN Interface Detection", self.test_ran_interface),
             ("OVS RAN Bridge Exists", self.test_ovs_ran_bridge),
             ("Patch Ports Configured", self.test_patch_ports),
@@ -95,6 +96,28 @@ class PhysicalRANTestSuite:
                 return False
         
         self.logger.success("OVS bridges configured correctly")
+        return True
+
+    def test_overlay_gateway_ownership(self) -> bool:
+        """Test worker OVS bridges own expected overlay gateway IPs"""
+        self.logger.info("Checking overlay gateway ownership on worker bridges...")
+
+        expected_gateways = {
+            "br-n2": "10.202.0.1/24",
+            "br-n3": "10.203.0.1/24",
+            "br-n4": "10.204.0.1/24",
+        }
+
+        for bridge, cidr in expected_gateways.items():
+            rc, stdout, stderr = self._ssh_worker(f"ip -o -4 addr show dev {bridge}")
+            if rc != 0:
+                self.logger.error(f"Cannot inspect {bridge}: {stderr}")
+                return False
+            if cidr not in stdout:
+                self.logger.error(f"{bridge} does not own expected gateway {cidr}")
+                return False
+
+        self.logger.success("Worker overlay gateway ownership is correct (N2/N3/N4)")
         return True
     
     def test_ran_interface(self) -> bool:

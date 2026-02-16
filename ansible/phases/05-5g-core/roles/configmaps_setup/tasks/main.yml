@@ -137,7 +137,7 @@
         name: smf-config
         namespace: 5g
       data:
-        smf.yaml: "{{ lookup('file', role_path + '/../../configs/smf.yaml') }}"
+        smf.yaml: "{{ lookup('template', role_path + '/../../configs/smf.yaml') }}"
   delegate_to: "{{ groups['masters'][0] }}"
   run_once: true
 
@@ -165,7 +165,7 @@
         name: upf-edge-config
         namespace: 5g
       data:
-        upf_edge.yaml: "{{ lookup('file', role_path + '/../../configs/upf_edge.yaml') }}"
+        upf_edge.yaml: "{{ lookup('template', role_path + '/../../configs/upf_edge.yaml') }}"
   delegate_to: "{{ groups['masters'][0] }}"
   run_once: true
 
@@ -188,7 +188,7 @@
         name: upf-cloud-config
         namespace: 5g
       data:
-        upf_cloud.yaml: "{{ lookup('file', role_path + '/../../configs/upf_cloud.yaml') }}"
+        upf_cloud.yaml: "{{ lookup('template', role_path + '/../../configs/upf_cloud.yaml') }}"
   delegate_to: "{{ groups['masters'][0] }}"
   run_once: true
 
@@ -430,6 +430,7 @@
 - name: ConfigMaps already applied via --from-file tasks
   shell: |
     true
+  changed_when: false
   delegate_to: "{{ groups['masters'][0] }}"
   run_once: true
 
@@ -458,8 +459,9 @@
     msg: "ConfigMaps: 5g={{ configmaps_5g.resources | length }}, mec={{ configmaps_mec.resources | length }}"
   run_once: true
 
-- name: Display ConfigMaps status
+- name: Display ConfigMaps names snapshot
   debug:
-    var: configmaps_status.stdout_lines
-  delegate_to: "{{ groups['masters'][0] }}"
+    msg:
+      - "5g ConfigMaps sample: {{ (configmaps_5g.resources | map(attribute='metadata.name') | list | sort)[:8] | join(', ') }}"
+      - "mec ConfigMaps sample: {{ (configmaps_mec.resources | map(attribute='metadata.name') | list | sort)[:8] | join(', ') }}"
   run_once: true

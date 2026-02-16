@@ -32,6 +32,8 @@
   tags:
     - phase6
     - endpoints_sync
+  vars_files:
+    - vars/topology.yml
   roles:
     - roles/endpoints_sync
 

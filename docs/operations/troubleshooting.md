@@ -2,6 +2,20 @@
 
 Common issues and their solutions.
 
+## Time Sync (VM Clock Drift)
+
+**Symptom**: `ping` shows `invalid tv_usec`, `time of day goes back`, `wrong data byte`; logs have odd timestamps.
+
+**Cause**: VM clock drift (common with VirtualBox suspend/resume).
+
+**Solutions**:
+- Phase 1 deploys **chrony** with `makestep 1 -1` for VM-friendly NTP sync.
+- Vagrant triggers enable **VirtualBox Guest Additions** time sync (10s interval) after `up`/`resume`.
+- Force immediate sync: `vagrant ssh worker -c 'sudo chronyc -a makestep'`
+- Check chrony: `chronyc sources -v` and `chronyc tracking`
+
+---
+
 ## Quick Diagnostics
 
 ```bash
@@ -206,6 +220,33 @@ kubectl logs -n 5g deploy/smf -c smf | grep -i pfcp
 # Check connectivity
 kubectl exec -n 5g deploy/smf -- ping -c 3 10.204.0.102
 ```
+
+### PDU Session Setup Rejected (Cause 34 / Duplicated Session ID)
+
+**Symptom**:
+- AMF logs show `PDUSessionResourceSetupResponse(Unsuccessful)`
+- AMF logs show `Receive Update SM context(DUPLICATED_PDU_SESSION_ID)`
+- SMF logs show `Cause[Group:1 Cause:34]`
+- No stable GTP-U traffic (`udp/2152`) during attach
+
+**Diagnosis**:
+```bash
+# AMF failure signature
+kubectl -n 5g logs deploy/amf -c amf --tail=300 | grep -E "PDUSessionResourceSetupResponse|DUPLICATED_PDU_SESSION_ID"
+
+# SMF failure signature
+kubectl -n 5g logs deploy/smf -c smf --tail=300 | grep -E "Cause\\[Group:1 Cause:34\\]|DNN|IPv4\\["
+
+# Verify N3 gateway ownership on worker
+vagrant ssh worker -c 'ip -o -4 addr show br-n3'
+# Expected: 10.203.0.1/24
+
+# Verify UPF can reach N3 gateway
+vagrant ssh master -c 'sudo k3s kubectl -n 5g exec deploy/upf-cloud -c upf-cloud -- ping -c 3 -I n3 10.203.0.1'
+```
+
+**Interpretation**:
+- If N4/PFCP is healthy but this signature persists, the failure is typically on gNB/UE context handling or RAN-side policy alignment (slice/DNN/session state), not on SMF↔UPF control-plane connectivity.
 
 ---
 

@@ -123,6 +123,68 @@
       "msisdn": [],
       "schema_version": 1,
       "__v": 0
+    },
+    {
+      "imsi": "001010123456789",
+      "subscribed_rau_tau_timer": 12,
+      "network_access_mode": 0,
+      "subscriber_status": 0,
+      "access_restriction_data": 32,
+      "slice": [
+        {
+          "sst": 1,
+          "default_indicator": true,
+          "sd": "000001",
+          "session": [
+            {
+              "name": "internet",
+              "type": 3,
+              "pcc_rule": [],
+              "ambr": {
+                "uplink": {"value": 500, "unit": 2},
+                "downlink": {"value": 500, "unit": 2}
+              },
+              "qos": {
+                "index": 9,
+                "arp": {"priority_level": 15, "pre_emption_capability": 1, "pre_emption_vulnerability": 1}
+              }
+            }
+          ]
+        },
+        {
+          "sst": 2,
+          "default_indicator": false,
+          "sd": "000001",
+          "session": [
+            {
+              "name": "mec",
+              "type": 3,
+              "pcc_rule": [],
+              "ambr": {
+                "uplink": {"value": 1000, "unit": 2},
+                "downlink": {"value": 1000, "unit": 2}
+              },
+              "qos": {
+                "index": 9, 
+                "arp": {"priority_level": 15, "pre_emption_capability": 1, "pre_emption_vulnerability": 1}
+              }
+            }
+          ]
+        }
+      ],
+      "ambr": {
+        "uplink": {"value": 2000, "unit": 2},
+        "downlink": {"value": 2000, "unit": 2}
+      },
+      "security": {
+        "k": "556599fffe16f47f9124e70cd74a4cbb",
+        "amf": "8000",
+        "op": "11111111111111111111111111111111",
+        "opc": null
+      },
+      "msisdn": [],
+      "schema_version": 1,
+      "__v": 0
     }
   ]
 }

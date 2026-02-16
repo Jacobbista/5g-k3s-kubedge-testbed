@@ -6,8 +6,11 @@ metadata:
 spec:
   schedule: "{{ sync_schedule }}"
   concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: {{ cronjob_successful_jobs_history_limit }}
+  failedJobsHistoryLimit: {{ cronjob_failed_jobs_history_limit }}
   jobTemplate:
     spec:
+      ttlSecondsAfterFinished: {{ cronjob_ttl_seconds_after_finished }}
       template:
         spec:
           serviceAccountName: {{ service_account_name }}

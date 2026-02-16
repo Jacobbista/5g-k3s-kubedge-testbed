@@ -29,11 +29,13 @@ class ProtocolTestSuite:
             ("PFCP Protocol (N4)", self.test_pfcp_protocol),
             ("NGAP Protocol (N2)", self.test_ngap_protocol),
             ("GTP-U Protocol (N3)", self.test_gtpu_protocol),
+            ("N3 Gateway Reachability", self.test_n3_gateway_reachability),
             ("NAS Protocol (N1)", self.test_nas_protocol),
             ("Network Interface IPs", self.test_network_interface_ips),
             ("VXLAN Tunnel Configuration", self.test_vxlan_tunnels),
             ("OVS Bridge Setup", self.test_ovs_bridges),
-            ("Protocol Message Exchange", self.test_protocol_message_exchange)
+            ("Protocol Message Exchange", self.test_protocol_message_exchange),
+            ("PDU Failure Signatures", self.test_pdu_failure_signatures)
         ]
         
         passed = 0
@@ -49,6 +51,7 @@ class ProtocolTestSuite:
                     failed += 1
             except Exception as e:
                 self.logger.error(f"{test_name} failed with exception: {e}")
+                success = False
                 failed += 1
             self.logger.test_end(test_name, success)
         
@@ -227,6 +230,38 @@ class ProtocolTestSuite:
         except Exception as e:
             self.logger.error(f"NAS protocol test failed: {e}")
             return False
+
+    def test_n3_gateway_reachability(self) -> bool:
+        """Test N3 gateway reachability from UPF pods"""
+        self.logger.info("Testing N3 gateway reachability from UPFs...")
+
+        n3_gateway = "10.203.0.1"
+
+        try:
+            upf_pods = self.component_validator.get_component_pods("upf")
+            if not upf_pods:
+                self.logger.error("No UPF pods found")
+                return False
+
+            for upf_pod in upf_pods:
+                upf_name = upf_pod["metadata"]["name"]
+                result = self.kubectl.exec_in_pod(
+                    upf_name,
+                    "5g",
+                    ["ping", "-c", "2", "-W", "2", "-I", "n3", n3_gateway],
+                )
+                if result.returncode != 0:
+                    self.logger.error(f"UPF {upf_name} cannot reach N3 gateway {n3_gateway}")
+                    self.logger.info(f"[debug] ping output ({upf_name}):\n{result.stdout}\n{result.stderr}")
+                    self.component_validator.debug_pod(upf_name, "5g", self.logger)
+                    return False
+                self.logger.success(f"UPF {upf_name} can reach N3 gateway {n3_gateway}")
+
+            return True
+
+        except Exception as e:
+            self.logger.error(f"N3 gateway reachability test failed: {e}")
+            return False
     
     def test_network_interface_ips(self) -> bool:
         """Test network interface IP assignments"""
@@ -388,6 +423,48 @@ class ProtocolTestSuite:
             
         except Exception as e:
             self.logger.error(f"Protocol message exchange test failed: {e}")
+            return False
+
+    def test_pdu_failure_signatures(self) -> bool:
+        """Test known AMF/SMF PDU failure signatures are absent"""
+        self.logger.info("Checking AMF/SMF logs for known PDU failure signatures...")
+
+        try:
+            amf_pods = self.component_validator.get_component_pods("amf")
+            smf_pods = self.component_validator.get_component_pods("smf")
+            if not amf_pods or not smf_pods:
+                self.logger.error("AMF/SMF pods are required for signature checks")
+                return False
+
+            amf_pod = amf_pods[0]["metadata"]["name"]
+            smf_pod = smf_pods[0]["metadata"]["name"]
+
+            amf_logs = self.kubectl.get_pod_logs(amf_pod, "5g", tail_lines=400)
+            smf_logs = self.kubectl.get_pod_logs(smf_pod, "5g", tail_lines=400)
+
+            amf_patterns = [
+                "PDUSessionResourceSetupResponse(Unsuccessful)",
+                "DUPLICATED_PDU_SESSION_ID",
+            ]
+            smf_patterns = [
+                "Cause[Group:1 Cause:34]",
+            ]
+
+            amf_hits = [p for p in amf_patterns if p in amf_logs]
+            smf_hits = [p for p in smf_patterns if p in smf_logs]
+
+            if amf_hits or smf_hits:
+                if amf_hits:
+                    self.logger.error(f"AMF failure signatures detected: {amf_hits}")
+                if smf_hits:
+                    self.logger.error(f"SMF failure signatures detected: {smf_hits}")
+                return False
+
+            self.logger.success("No known PDU failure signatures found in AMF/SMF logs")
+            return True
+
+        except Exception as e:
+            self.logger.error(f"PDU failure signature test failed: {e}")
             return False
 
 

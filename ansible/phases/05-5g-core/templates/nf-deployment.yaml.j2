@@ -3,9 +3,6 @@ kind: Deployment
 metadata:
   name: {{ nf.name }}
   namespace: {{ namespace_5g }}
-  annotations:
-    checksum/config: "{{ lookup('file', playbook_dir + '/configs/' ~ (nf.name | replace('-', '_')) ~ '.yaml') | hash('sha256') }}"
-    checksum/scripts: "{{ lookup('file', playbook_dir + '/scripts/' ~ (nf.name | replace('-', '_')) ~ '_init.sh') | hash('sha256') }}"
 spec:
   replicas: {{ nf.replicas | default(1) }}
   selector:
@@ -15,8 +12,10 @@ spec:
     metadata:
       labels:
         app: {{ nf.name }}
-{% if nf.networks is defined %}
       annotations:
+        checksum/config: "{{ lookup('template', playbook_dir + '/configs/' ~ (nf.name | replace('-', '_')) ~ '.yaml') | hash('sha256') }}"
+        checksum/scripts: "{{ lookup('file', playbook_dir + '/scripts/' ~ (nf.name | replace('-', '_')) ~ '_init.sh') | hash('sha256') }}"
+{% if nf.networks is defined %}
         k8s.v1.cni.cncf.io/networks: |
           {{ nf.networks | to_json }}
 {% endif %}

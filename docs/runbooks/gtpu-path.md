@@ -68,6 +68,25 @@ kubectl -n 5g exec deploy/upf-edge -- ip route show dev n3
 kubectl -n 5g exec deploy/gnb -- ip route show dev n3
 ```
 
+### 3.1 Overlay Gateway Ownership (Host-Side)
+
+For stable N3 forwarding, the worker host must own the N3 gateway IP declared by IPAM.
+
+```bash
+# Worker host: N3 bridge must own 10.203.0.1/24
+vagrant ssh worker -c 'ip -o -4 addr show br-n3'
+# Expected to include: 10.203.0.1/24
+
+# Optional: validate N2/N4 gateways as well
+vagrant ssh worker -c 'ip -o -4 addr show br-n2 br-n4'
+# Expected to include: 10.202.0.1/24 and 10.204.0.1/24
+
+# From UPF cloud pod, the N3 gateway must be reachable
+vagrant ssh master -c 'sudo k3s kubectl -n 5g exec deploy/upf-cloud -c upf-cloud -- ping -c 3 -I n3 10.203.0.1'
+```
+
+If `10.203.0.1` is missing on `br-n3`, PDU setup can fail before user-plane traffic starts.
+
 ### 4. Connectivity Tests
 
 ```bash

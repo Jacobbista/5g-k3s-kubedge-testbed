@@ -24,6 +24,16 @@ create_br() {
   ip link set "$br" mtu 1450 || true
 }
 
+ensure_bridge_ip() { # $1=bridge $2=cidr
+  local br="$1" cidr="$2"
+  if ip -o -4 addr show dev "$br" | awk '{print $4}' | grep -qx "$cidr"; then
+    echo "  -> $br already has $cidr"
+    return 0
+  fi
+  echo "  -> assign $cidr to $br"
+  ip addr add "$cidr" dev "$br" 2>/dev/null || true
+}
+
 calc_local_ip() {
   local peer="$1"
   ip -4 route get "$peer" 2>/dev/null \
@@ -75,6 +85,19 @@ else
   create_vx br-n3 vxlan-n3 103 "$PEER" "$LOCAL_TUN_IP"
   create_vx br-n4 vxlan-n4 104 "$PEER" "$LOCAL_TUN_IP"
   create_vx br-n6c vxlan-n6 106 "$PEER" "$LOCAL_TUN_IP"
+fi
+
+# Assign gateway IPs expected by Whereabouts/IPAM.
+# Use worker as gateway owner for shared N1/N2/N3/N4 domains.
+if [[ "$NODE_NAME" == "worker" ]]; then
+  ensure_bridge_ip br-n1 10.201.0.1/24
+  ensure_bridge_ip br-n2 10.202.0.1/24
+  ensure_bridge_ip br-n3 10.203.0.1/24
+  ensure_bridge_ip br-n4 10.204.0.1/24
+  ensure_bridge_ip br-n6c 10.207.0.1/24
+elif [[ "$NODE_NAME" == "edge" ]]; then
+  # N6e local gateway on edge (MEC side)
+  ensure_bridge_ip br-n6e 10.206.0.1/24
 fi
 
 # Create per-cell bridges (for N2 and N3 per cell)

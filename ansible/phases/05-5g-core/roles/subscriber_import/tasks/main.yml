@@ -51,6 +51,10 @@
     namespace: 5g
     state: present
     definition:
+      metadata:
+        labels:
+          app.kubernetes.io/name: subscriber-import
+          app.kubernetes.io/component: bootstrap
       data:
         subs.json: "{{ subs_array | to_json }}"
     kubeconfig: "/home/vagrant/kubeconfig"
@@ -63,9 +67,44 @@
     namespace: 5g
     state: present
     definition:
+      metadata:
+        labels:
+          app.kubernetes.io/name: subscriber-import
+          app.kubernetes.io/component: bootstrap
       data:
         import_subscribers.py: "{{ lookup('template', role_path + '/templates/import_subscribers.py.j2') }}"
     kubeconfig: "/home/vagrant/kubeconfig"
+
+- name: Get existing subscriber import Jobs
+  kubernetes.core.k8s_info:
+    api_version: batch/v1
+    kind: Job
+    namespace: 5g
+    kubeconfig: "/home/vagrant/kubeconfig"
+  register: existing_jobs
+
+- name: Build stale subscriber import Job list
+  set_fact:
+    stale_sub_import_jobs: >-
+      {{
+        existing_jobs.resources
+        | map(attribute='metadata.name')
+        | select('match', '^sub-import-')
+        | reject('equalto', 'sub-import-' ~ subs_checksum)
+        | list
+      }}
+
+- name: Delete stale subscriber import Jobs
+  kubernetes.core.k8s:
+    api_version: batch/v1
+    kind: Job
+    name: "{{ item }}"
+    namespace: 5g
+    state: absent
+    kubeconfig: "/home/vagrant/kubeconfig"
+  loop: "{{ stale_sub_import_jobs }}"
+  loop_control:
+    label: "{{ item }}"
 
 - name: Delete previous import Job (fresh run)
   kubernetes.core.k8s:
@@ -76,6 +115,36 @@
     state: absent
     kubeconfig: "/home/vagrant/kubeconfig"
 
+- name: Get existing subscriber import pods
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Pod
+    namespace: 5g
+    kubeconfig: "/home/vagrant/kubeconfig"
+  register: existing_sub_import_pods
+
+- name: Build stale subscriber import pod list
+  set_fact:
+    stale_sub_import_pods: >-
+      {{
+        existing_sub_import_pods.resources
+        | map(attribute='metadata.name')
+        | select('match', '^sub-import-')
+        | list
+      }}
+
+- name: Delete stale subscriber import pods
+  kubernetes.core.k8s:
+    api_version: v1
+    kind: Pod
+    name: "{{ item }}"
+    namespace: 5g
+    state: absent
+    kubeconfig: "/home/vagrant/kubeconfig"
+  loop: "{{ stale_sub_import_pods }}"
+  loop_control:
+    label: "{{ item }}"
+
 - name: Create Job to import subscribers into MongoDB (Python + pymongo)
   kubernetes.core.k8s:
     api_version: batch/v1
@@ -84,9 +153,19 @@
     namespace: 5g
     state: present
     definition:
+      metadata:
+        labels:
+          app.kubernetes.io/name: subscriber-import
+          app.kubernetes.io/component: bootstrap
       spec:
         backoffLimit: 0
+        ttlSecondsAfterFinished: 300
         template:
+          metadata:
+            labels:
+              app: subscriber-import
+              app.kubernetes.io/name: subscriber-import
+              app.kubernetes.io/component: bootstrap
           spec:
             nodeSelector:
               kubernetes.io/hostname: worker

@@ -1,0 +1,19 @@
+# Chrony configuration for 5G testbed VMs
+# Optimized for VirtualBox/Vagrant and host sleep/wake behavior.
+#
+# master: syncs from upstream NTP pool and serves cluster nodes
+# worker/edge: prefer master as local source, fallback to upstream
+
+{% if inventory_hostname in groups['masters'] %}
+pool {{ ntp_pool | default('pool.ntp.org') }} iburst maxsources 4
+# Serve time to cluster nodes on private network
+allow 192.168.56.0/24
+{% else %}
+server {{ cluster_ntp_server }} iburst prefer
+pool {{ ntp_pool | default('pool.ntp.org') }} iburst maxsources 2
+{% endif %}
+driftfile /var/lib/chrony/drift
+# Allow stepping clock when offset is large at any time (VM sleep/resume)
+makestep 1 -1
+rtcsync
+logdir /var/log/chrony

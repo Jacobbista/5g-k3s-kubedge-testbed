@@ -1,14 +1,15 @@
 logger:
   file:
     path: /open5gs/install/var/log/open5gs/upf-edge.log
+  level: info
 upf:
   pfcp:
     server:
-      - address: 10.204.0.101
+      - address: {{ upf_edge_n4_ip }}
         port: 8805
   gtpu:
     server:
-      - address: 10.204.0.101
+      - address: {{ upf_edge_n3_ip }}
   session:
     - subnet: 10.46.0.0/16
       gateway: 10.46.0.1
@@ -16,5 +17,5 @@ upf:
       dev: ogstun
   metrics:
     server:
-      - address: 10.204.0.101
+      - address: {{ upf_edge_n4_ip }}
         port: 9090

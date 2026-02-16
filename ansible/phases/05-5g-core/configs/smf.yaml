@@ -2,6 +2,7 @@ db_uri: mongodb://mongodb:27017/open5gs
 logger:
   file:
     path: /open5gs/install/var/log/open5gs/smf.log
+  level: info
 smf:
   sbi:
     server:
@@ -14,27 +15,22 @@ smf:
     no_tls: true
   pfcp:
     server:
-      - address: 10.204.0.100  # SMF su n4
+      - address: {{ smf_n4_ip }}  # SMF su n4
         port: 8805
     client:
       upf:
-        - address: 10.204.0.101  # N4 upf-edge
+        - address: {{ upf_cloud_n4_ip }}  # N4 upf-cloud
           dnn: internet
-        - address: 10.204.0.102  # N4 upf-cloud
-          dnn: mec
   gtpc:
     server:
-      - address: 10.204.0.100
+      - address: {{ smf_n4_ip }}
   gtpu:
     server:
-      - address: 10.204.0.100
+      - address: {{ smf_n4_ip }}
   session:
     - subnet: 10.45.0.0/16
       gateway: 10.45.0.1
       dnn: internet
-    - subnet: 10.46.0.0/16
-      gateway: 10.46.0.1
-      dnn: mec
   dns:
     - 8.8.8.8
     - 8.8.4.4

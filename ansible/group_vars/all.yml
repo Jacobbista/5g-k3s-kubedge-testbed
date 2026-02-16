@@ -30,12 +30,12 @@ amf_cell_n2_ip_suffix: 10
 gnb_cell_n2_ip_suffix: 11
 gnb_cell_n3_ip_suffix: 11
 # N3 UPF static IPs (must be within n3-net NAD range)
-upf_edge_n3_ip: 10.203.0.100
 upf_cloud_n3_ip: 10.203.0.101
+upf_edge_n3_ip: 10.203.0.102
 # N4 SMF/UPF static IPs (must be within n4-net NAD range)
 smf_n4_ip: 10.204.0.100
-upf_edge_n4_ip: 10.204.0.101
-upf_cloud_n4_ip: 10.204.0.102
+upf_cloud_n4_ip: 10.204.0.101
+upf_edge_n4_ip: 10.204.0.102
 
 # Component versions/images (centralized)
 multus_version: 4.1.0
@@ -104,5 +104,14 @@ physical_ran_interface: "enp0s9"
 physical_ran_subnet: "192.168.5.0/24"
 # AMF's IP on the physical RAN network (gNB connects here)
 amf_physical_ran_ip: "192.168.5.150"
+
+# Bridge physical RAN to both N2 and N3 when using real gNB/UE.
+# This enables NGAP (control plane) and GTP-U (user plane) end-to-end.
+ran_bridge_mode: n2_n3
+ran_interface: "{{ physical_ran_interface }}"
+
+# Keep edge UPF disabled by default in current physical-RAN profile.
+# Set true only when upf-edge replica is enabled and reachable on N4.
+use_upf_edge: false
 
 # Phase 6 topology variables moved to ansible/phases/06-ueransim-mec/vars/topology.yml
