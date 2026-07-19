@@ -6,7 +6,7 @@
 
 <p align="center">
   <strong>Kubernetes-Edge Lightweight Testbed</strong><br>
-  A reproducible, cloud-native 5G core and cloud-edge testbed that runs on a single workstation.
+  A 5G core and cloud-edge testbed that runs on one machine, built from scratch with Vagrant and Ansible.
 </p>
 
 <p align="center">
@@ -18,11 +18,12 @@
 
 A research testbed under active development. Components are tiered by maturity:
 
-- **Supported** (validated, reproducible): core 5G deployment, VXLAN overlays, dashboard, IAM, node and NF metrics, physical RAN, CAMARA location and positioning*.
-- **Experimental** (present, not fully validated): UERANSIM, KubeEdge edge node, UPF-MEC, log and alerting stack.
+- **Supported** (validated, reproducible): core 5G deployment, VXLAN overlays, dashboard, IAM, node and NF metrics, physical RAN.
+- **Experimental** (present, not fully validated): CAMARA location and positioning, UERANSIM, KubeEdge edge node, UPF-MEC, log and alerting stack.
 - **Planned** (no working code yet): edge provisioning from the dashboard, MEC scheduling, O-RAN RIC, NWDAF.
 
-\*CAMARA location and positioning are shown at their target tier; end-to-end validation is in progress.
+CAMARA location and positioning are built and deploy, and Supported is where they
+are headed, but the end-to-end validation is not done yet.
 
 Full matrix and reproducibility scope: [docs/status.md](docs/status.md).
 
@@ -30,11 +31,14 @@ Full matrix and reproducibility scope: [docs/status.md](docs/status.md).
 
 The cluster is up to three nodes (K3s master, worker, and an optional KubeEdge edge), brought up and configured by a separate Ansible provisioning VM. The worker runs the Open5GS core network functions (AMF, SMF, UPF, NRF, and others) alongside KubeEdge CloudCore. The edge node hosts EdgeCore with UERANSIM gNB and UEs, or a physical femtocell. OVS+VXLAN tunnels carry the 5G control and user-plane traffic between them with per-interface isolation.
 
-### 5G System Architecture (3GPP Release 17)
+### Where it sits in a 5G system
 
-![5G System Architecture (Source: ENISA)](docs/assets/5G-Core-SBA-Source-ENISA.png)
+![5G core service-based architecture (Source: ENISA)](docs/assets/5G-Core-SBA-Source-ENISA.png)
 
-The testbed implements the reference point interfaces: N1 (UE–AMF), N2 (gNB–AMF), N3 (gNB–UPF), N4 (SMF–UPF), and N6 (UPF–DN). Each interface runs on a dedicated VXLAN-isolated overlay.
+The figure above is the 3GPP service-based architecture, for reference. The network
+functions themselves come from Open5GS. What KELT adds is the deployment: the
+functions run as pods, and the interfaces between them (N1, N2, N3, N4, N6) each
+get their own VXLAN overlay instead of sharing one flat network.
 
 ### Testbed Implementation
 
@@ -80,7 +84,7 @@ graph LR
 
 **Host OS:** Ubuntu 24.04.4 LTS (desktop and server). Other Linux distributions are untested.
 
-**Prerequisites:** Vagrant ≥ 2.3.0, VirtualBox ≥ 6.1.0, 16 GB RAM. The first-run wizard checks these and offers to install [gum](https://github.com/charmbracelet/gum) and the shell alias automatically.
+**Prerequisites:** Vagrant ≥ 2.3.0, VirtualBox ≥ 6.1.0, 16 GB RAM. The first-run wizard checks these and offers to install [gum](https://github.com/charmbracelet/gum) and the `kelt` command.
 
 ```bash
 git clone https://github.com/Jacobbista/kelt.git
@@ -89,15 +93,14 @@ cd kelt
 ```
 
 The wizard verifies host requirements (vagrant, VirtualBox, vboxusers
-group, CPU virtualization), installs gum, sets up the `testbed`
-shell alias, and initializes the deployment profile. Once complete,
-the alias works from any directory:
+group, CPU virtualization), installs gum, puts `kelt` on your PATH, and
+initializes the deployment profile. After that it works from any directory:
 
 ```bash
-testbed up                 # bring the cluster up
-testbed                    # open the interactive menu
-testbed autostart on       # bring the cluster up automatically on boot
-testbed help               # full reference
+kelt up                    # bring the cluster up
+kelt                       # open the interactive menu
+kelt autostart on          # bring the cluster up automatically on boot
+kelt help                  # full reference
 ```
 
 **Verify after deployment:**
@@ -189,6 +192,11 @@ Third-party component licenses are listed in [NOTICE](NOTICE).
 
 ## Acknowledgements
 
-Inspired by [ComNetsEmu](https://www.granelli-lab.org/researches/relevant-projects/comnetsemu-sdn-nfv-emulator), the SDN/NFV network emulator from the [Granelli Lab](https://www.granelli-lab.org) (Prof. Fabrizio Granelli, University of Trento), where this project started as a course project. KELT takes a different route: it runs real workloads on Kubernetes connected by real OVS/VXLAN overlays, rather than ComNetsEmu's Mininet and Docker emulation.
+This project started as a course project in the [Granelli Lab](https://www.granelli-lab.org)
+(Prof. Fabrizio Granelli, University of Trento), and took its starting point from
+[ComNetsEmu](https://www.granelli-lab.org/researches/relevant-projects/comnetsemu-sdn-nfv-emulator),
+the lab's SDN/NFV emulator. It went in a different direction: ComNetsEmu builds its
+topologies with Mininet and Docker, while KELT schedules containers on Kubernetes and
+carries the 5G interfaces over OVS/VXLAN overlays.
 
 Built with [K3s](https://k3s.io), [KubeEdge](https://kubeedge.io), [Open5GS](https://open5gs.org), [UERANSIM](https://github.com/aligungr/UERANSIM), and [Multus CNI](https://github.com/k8snetworkplumbingwg/multus-cni).
