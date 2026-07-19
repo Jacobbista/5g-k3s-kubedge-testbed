@@ -1,17 +1,23 @@
 /**
  * Dashboard self-update: awareness, and the rollout the operator triggers.
  *
- * The awkward part is that the frontend updates ITSELF. The pod serving this
- * page is the one being replaced, so during the rollout every request through
- * the same origin fails until the new pod is ready. Left alone that produces a
- * scatter of errors across whatever pages happen to be mounted.
+ * The awkward part is that the frontend can update ITSELF. In the cluster deploy
+ * target the pod serving this page is the one being replaced, so every request
+ * through the same origin fails until the new pod is ready. Left alone that
+ * scatters errors across whatever pages happen to be mounted.
  *
  * So a rollout unmounts the app and shows a full-screen overlay instead. Nothing
- * else is polling, request failures are the EXPECTED state rather than an error,
- * and when the backend answers again the page reloads so the new bundle replaces
- * the old one (two bundle generations live in one tab is what produces "Invalid
- * hook call"). A rollout that never completes ends in a message, never a blank
- * page or a spinner that spins forever.
+ * else is polling, request failures become the EXPECTED state rather than an
+ * error, and the page reloads once the new version reports ready (two bundle
+ * generations live in one tab is what produces "Invalid hook call").
+ *
+ * Completion is decided by the COMPONENT STATUS, not by this page's own server
+ * going away. The dev frontend is served by Vite on the ansible VM and keeps
+ * serving throughout a cluster rollout, so a check based on the page dying waits
+ * for something that never happens there.
+ *
+ * A rollout that never completes ends in a message, never a blank page or a
+ * spinner with no way out.
  */
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
 import { getDashboardComponents, updateDashboardComponent } from "../api";
@@ -56,20 +62,28 @@ export function UpdateProvider({ children }) {
   }, [refresh, toast]);
 
   const startUpdate = useCallback(async (name) => {
-    setRollout({ name, phase: "starting", since: Date.now() });
+    let res = null;
     try {
-      await updateDashboardComponent(name);
+      res = await updateDashboardComponent(name);
     } catch (e) {
-      // The request itself can be cut off by the very rollout it triggered, so a
-      // failure here is not conclusive: fall through to polling and let the
-      // cluster state decide.
+      // In the cluster deploy target the request can be cut off by the very
+      // rollout it triggered, so a network failure is not conclusive: fall
+      // through and let the component status decide.
       if (!/fetch|network|load failed/i.test(e?.message || "")) {
-        setRollout({ name, phase: "failed", error: e?.message || "Could not start the update" });
+        toast.error(`${name}: ${e?.message || "could not start the update"}`);
         return;
       }
     }
-    setRollout({ name, phase: "rolling", since: Date.now() });
-  }, []);
+    // The backend answers "up-to-date" when there was nothing to roll. Showing a
+    // progress overlay for a no-op is how it ends up waiting for something that
+    // is never going to happen.
+    if (res && res.status === "up-to-date") {
+      toast.info(`${name} is already at ${res.version || "the latest version"}.`);
+      refresh();
+      return;
+    }
+    setRollout({ name, since: Date.now() });
+  }, [refresh, toast]);
 
   const dismissRollout = useCallback(() => setRollout(null), []);
 
@@ -81,12 +95,19 @@ export function UpdateProvider({ children }) {
 }
 
 function RolloutOverlay({ rollout, onDismiss }) {
-  const [state, setState] = useState(rollout.phase === "failed" ? "failed" : "rolling");
-  const [wentDown, setWentDown] = useState(false);
+  const [state, setState] = useState("rolling");
+  const [elapsed, setElapsed] = useState(0);
   const startedAt = useRef(rollout.since || Date.now());
 
+  // Elapsed time is the difference between "working" and "stale": without it a
+  // static card gives no evidence that anything is still happening.
   useEffect(() => {
-    if (state === "failed") return undefined;
+    const t = setInterval(() => setElapsed(Math.floor((Date.now() - startedAt.current) / 1000)), 1000);
+    return () => clearInterval(t);
+  }, []);
+
+  useEffect(() => {
+    if (state !== "rolling") return undefined;
     let alive = true;
     const tick = async () => {
       if (!alive) return;
@@ -95,59 +116,58 @@ function RolloutOverlay({ rollout, onDismiss }) {
         return;
       }
       try {
-        // Same-origin, so this only answers once the new pod is serving.
-        const res = await fetch("/health", { cache: "no-store" });
-        if (!res.ok) throw new Error(String(res.status));
-        // Only treat a success as "done" after the old pod actually went away.
-        // Otherwise the first poll lands on the pod that is still terminating
-        // and the page reloads into the old bundle.
-        if (wentDown) {
+        // The component status is the only signal that works for both deploy
+        // targets. Watching for this page's own server to die only holds for the
+        // cluster pod; the dev server keeps serving throughout, so that check
+        // waited forever for something that never happens.
+        const list = await getDashboardComponents();
+        const c = (list || []).find((x) => x.name === rollout.name);
+        if (c && c.state === "up-to-date") {
           setState("done");
-          setTimeout(() => window.location.reload(), 800);
+          // Reload so the tab picks up the new bundle: two bundle generations in
+          // one tab is what produces "Invalid hook call".
+          setTimeout(() => window.location.reload(), 900);
           return;
         }
       } catch {
-        if (!wentDown) setWentDown(true);
+        // Expected while the cluster pod is being replaced: keep waiting.
       }
       if (alive) setTimeout(tick, POLL_MS);
     };
     const t = setTimeout(tick, POLL_MS);
     return () => { alive = false; clearTimeout(t); };
-  }, [state, wentDown]);
+  }, [state, rollout.name]);
 
   const COPY = {
     rolling: {
       title: "Updating the dashboard",
-      body: wentDown
-        ? "The old pod has stopped. Waiting for the new one to serve."
-        : "Rolling out the new image. This page will reload by itself when it is ready.",
+      body: "Pulling the new image and waiting for the pod to serve. This page reloads by itself when the new version reports ready.",
     },
     done: { title: "Update applied", body: "Reloading with the new version." },
     timeout: {
       title: "The rollout did not finish in time",
-      body: "The new pod has not started serving. It may still be pulling the image, or it may have failed to start. Check the dashboard pod, then reload.",
-    },
-    failed: {
-      title: "Could not start the update",
-      body: rollout.error || "The update request was refused.",
+      body: "The new version has not reported ready. It may still be pulling the image, or the pod may have failed to start. Check the dashboard pod, then reload.",
     },
   }[state];
 
-  const stuck = state === "timeout" || state === "failed";
+  const stuck = state === "timeout";
 
   return (
     <div className="fixed inset-0 z-[200] flex items-center justify-center bg-slate-950 p-6">
       <div className="w-full max-w-md rounded-lg border border-slate-700 bg-slate-900 p-6">
         <div className="flex items-center gap-3">
-          {!stuck && state !== "done" && (
+          {state === "rolling" && (
             <span className="h-3 w-3 shrink-0 animate-pulse rounded-full bg-sky-400" />
           )}
           <h2 className="text-sm font-semibold text-slate-100">{COPY.title}</h2>
+          {state === "rolling" && (
+            <span className="ml-auto font-mono text-[11px] text-slate-500">{elapsed}s</span>
+          )}
         </div>
         <p className="mt-2 text-xs leading-relaxed text-slate-400">{COPY.body}</p>
 
-        {stuck && (
-          <div className="mt-4 flex flex-wrap gap-2">
+        <div className="mt-4 flex flex-wrap gap-2">
+          {stuck && (
             <button
               type="button"
               onClick={() => window.location.reload()}
@@ -155,15 +175,17 @@ function RolloutOverlay({ rollout, onDismiss }) {
             >
               reload anyway
             </button>
-            <button
-              type="button"
-              onClick={onDismiss}
-              className="rounded bg-slate-700/60 px-3 py-1.5 text-xs font-medium text-slate-300 hover:bg-slate-700"
-            >
-              back to the dashboard
-            </button>
-          </div>
-        )}
+          )}
+          {/* Always available: a progress screen with no way out is a trap even
+              when the operation is still legitimately running. */}
+          <button
+            type="button"
+            onClick={onDismiss}
+            className="rounded bg-slate-700/60 px-3 py-1.5 text-xs font-medium text-slate-300 hover:bg-slate-700"
+          >
+            back to the dashboard
+          </button>
+        </div>
       </div>
     </div>
   );
