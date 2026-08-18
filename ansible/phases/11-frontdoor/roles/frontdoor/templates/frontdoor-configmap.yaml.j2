@@ -110,12 +110,12 @@ data:
 {% endif %}
 {% if positioning_demo_enabled | default(false) | bool %}
 
-      # demo.<base> -> positioning demo SPA.
+      # demo.<base> -> location app SPA.
       server {
         listen 80;
         server_name {{ positioning_demo_subdomain }}.{{ external_base_domain }};
         location / {
-          set $up http://positioning-demo.{{ frontdoor_demo_namespace }}.svc.cluster.local:{{ frontdoor_demo_port }};
+          set $up http://{{ frontdoor_demo_service }}.{{ frontdoor_demo_namespace }}.svc.cluster.local:{{ frontdoor_demo_port }};
           proxy_pass $up;
         }
       }

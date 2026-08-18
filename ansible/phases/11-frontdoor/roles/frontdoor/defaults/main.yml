@@ -28,6 +28,9 @@ frontdoor_camara_namespace: camara
 frontdoor_camara_port: 8080
 frontdoor_demo_namespace: mec
 frontdoor_demo_port: 80
+# Service name the demo subdomain proxies to. Renamed positioning-demo ->
+# location-app in v0.9.0; the deploy name is set in the positioning_demo role.
+frontdoor_demo_service: location-app
 frontdoor_placement_namespace: positioning
 frontdoor_placement_port: 4180
 
