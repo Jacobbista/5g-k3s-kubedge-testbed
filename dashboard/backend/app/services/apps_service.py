@@ -186,6 +186,20 @@ class AppsService:
             s.metadata.name
             for s in self.k8s.core.list_namespaced_service(namespace=self.ns).items
         }
+        # Pods grouped by their `app` label (set on every pod this service deploys),
+        # so the UI can stream logs. Terminating pods are skipped: mid-rollout the
+        # old pod lingers and a log stream against it dies as it goes away.
+        pods_by_app: dict[str, list[dict[str, Any]]] = {}
+        for p in self.k8s.core.list_namespaced_pod(
+            namespace=self.ns, label_selector=f"app.kubernetes.io/managed-by={MANAGED_BY}"
+        ).items:
+            app = (p.metadata.labels or {}).get("app")
+            if not app or p.metadata.deletion_timestamp:
+                continue
+            restarts = sum(cs.restart_count for cs in (p.status.container_statuses or []))
+            pods_by_app.setdefault(app, []).append(
+                {"name": p.metadata.name, "phase": p.status.phase, "restarts": restarts}
+            )
         for d in deps:
             name = d.metadata.name
             container = (d.spec.template.spec.containers or [None])[0]
@@ -217,6 +231,7 @@ class AppsService:
                 "public_url": self._public_url(name, exposed),
                 "mec_attached": mec_attached,
                 "mec_ip": mec_ip,
+                "pods": pods_by_app.get(name, []),
                 "created": d.metadata.creation_timestamp.isoformat()
                 if d.metadata.creation_timestamp else None,
             })

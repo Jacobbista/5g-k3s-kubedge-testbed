@@ -189,9 +189,11 @@ Services hub. Read views are open to `dashboard-viewer`; deploy/delete require
 `dashboard-admin` plus the backend `allow_workload_create` gate.
 
 - Deployed apps: name, image, ready replicas, the public link (`kelt-<name>.<base>`)
-  for exposed apps, and an n6m badge for MEC-attached apps. Admins can delete an app,
-  or switch it to another pushed tag from a date-ordered version picker; an
-  "update available" hint appears when the registry holds a newer image for the tag
+  for exposed apps, and an n6m badge for MEC-attached apps. A **logs** button streams
+  the app pod's logs live (same viewer as the 5G core and Northbound services).
+  Admins can delete an app, or switch it to another pushed tag from a date-ordered
+  version picker; an "update available" hint appears when the registry holds a newer
+  image for the tag
 - Deploy from image: a registry image (`<host>/name:tag`), port, replicas, env
   vars (secret-marked go into a Secret), optional `imagePullSecret`, an **expose**
   toggle, and an **attach to MEC network (n6m)** toggle (optional fixed IP + extra

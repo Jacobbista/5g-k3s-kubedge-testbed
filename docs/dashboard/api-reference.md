@@ -146,7 +146,7 @@ Operator-deployed application pods in the `mec` namespace; the local registry li
 
 | Method | Path | Auth | Description |
 |---|---|---|---|
-| GET | `/api/v1/apps` | — | Inventory of deployed apps (name, image, replicas, ready, exposed, public URL `kelt-<name>.<base>`, `mec_attached`, `mec_ip`) |
+| GET | `/api/v1/apps` | — | Inventory of deployed apps (name, image, replicas, ready, exposed, public URL `kelt-<name>.<base>`, `mec_attached`, `mec_ip`, `pods` for log streaming) |
 | GET | `/api/v1/apps/public` | — | Unauthenticated (no token even in auth mode): names + public URLs of exposed apps, for the front-door welcome page |
 | GET | `/api/v1/apps/updates` | — | Per app: whether the registry digest for its tag is newer than the running pod's |
 | POST | `/api/v1/apps` | ✅ Admin | Deploy an app. Requires `DASHBOARD_ALLOW_WORKLOAD_CREATE=true`. Body: `{name, image, port?, replicas?, env[], image_pull_secret?, expose?, attach_mec?, mec_ip?, udp_ports[]}`. Creates a Deployment (+ Service on port 80 when exposed) pinned to the worker; `attach_mec` adds an `n6m-net` interface so UEs reach it over the user plane |

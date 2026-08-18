@@ -4,6 +4,7 @@ import { useAuth } from "../auth/AuthContext";
 import { IconArrowLeft } from "../components/icons";
 import { Panel, inputCls, btn, Field, Toggle } from "../components/ui";
 import Loader from "../components/Loader";
+import LogViewer from "../components/LogViewer";
 import { useToast } from "../context/ToastContext";
 import { useConfirm } from "../context/ConfirmContext";
 import { env } from "../runtime-env";
@@ -88,6 +89,7 @@ export default function AppsPage() {
   const [busy, setBusy] = useState(false);
   const [creds, setCreds] = useState({ shown: false, loading: false, data: null });
   const [prov, setProv] = useState({ busy: false, log: [] });
+  const [logTarget, setLogTarget] = useState(null); // { namespace, pod, deployment } for the log overlay
 
   const refresh = useCallback(async () => {
     try {
@@ -341,6 +343,16 @@ export default function AppsPage() {
                         update available
                       </span>
                     )}
+                    {a.pods && a.pods[0] && (
+                      <button
+                        type="button"
+                        title={`stream logs (${a.pods[0].name})`}
+                        onClick={() => setLogTarget({ namespace: a.namespace, pod: a.pods[0].name, deployment: a.name })}
+                        className="ml-auto rounded bg-indigo-600/20 px-2 py-1 text-[11px] font-medium text-indigo-300 transition-colors hover:bg-indigo-600/30"
+                      >
+                        logs
+                      </button>
+                    )}
                   </div>
 
                   {/* Meta: public URL + image ref, muted */}
@@ -553,6 +565,15 @@ docker push ${state.registryHost}/myapp:dev`}</pre>
             </div>
           </details>
         </Panel>
+      )}
+
+      {logTarget && (
+        <LogViewer
+          namespace={logTarget.namespace}
+          pod={logTarget.pod}
+          deployment={logTarget.deployment}
+          onClose={() => setLogTarget(null)}
+        />
       )}
     </div>
   );
