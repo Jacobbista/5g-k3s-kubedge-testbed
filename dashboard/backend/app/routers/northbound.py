@@ -229,7 +229,9 @@ def put_assets(
 ) -> dict[str, Any]:
     token = _bearer_token(authorization)
     result = _gateway_call(lambda: nb.put_assets(token, body.model_dump()))
-    write_audit("northbound.assets.put", {"count": result.get("count", 0)})
+    write_audit("northbound.assets.put", {
+        "count": result.get("count", 0),
+    })
     return result
 
 

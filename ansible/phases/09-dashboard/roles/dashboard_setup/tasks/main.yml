@@ -120,6 +120,10 @@
       DASHBOARD_APPS_REGISTRY_PASSWORD={{ apps_registry_password | default('') }}
       DASHBOARD_EXTERNAL_BASE_DOMAIN={{ external_base_domain | default('') }}
       DASHBOARD_EXTERNAL_SCHEME={{ external_scheme | default('https') }}
+      DASHBOARD_N6M_NAD_NAME={{ nad_n6m_name }}
+      DASHBOARD_N6M_NAD_NAMESPACE={{ nad_n6m_namespace }}
+      DASHBOARD_N6M_PUSH_ADAPTERS={% for k, v in (n6m_push_adapters | default({})).items() %}{{ k }}={{ v }}{{ "," if not loop.last else "" }}{% endfor %}
+
   register: backend_env_file
 
 - name: Create frontend environment file (used by Vite dev only)
@@ -145,8 +149,8 @@
       # falls back to the public GitHub site for every docs link.
       VITE_DOCS_URL={{ (external_scheme ~ '://' ~ dashboard_subdomain ~ '.' ~ external_base_domain ~ '/docs') if (external_base_domain | default('')) else '/docs' }}
       # Northbound catalog deploy-time default images, from all.yml (single source).
-      VITE_NB_WIFI_IMAGE={{ northbound_image_registry }}/wifi-positioning:{{ northbound_image_tags.wifi_positioning }}
-      VITE_NB_REST_ADAPTER_IMAGE={{ northbound_image_registry }}/rest-adapter:{{ northbound_image_tags.rest_adapter }}
+      VITE_NB_WIFI_IMAGE={{ northbound_image_registry }}/{{ northbound_image_names.wifi_adapter }}:{{ northbound_image_tags.wifi_adapter }}
+      VITE_NB_REST_ADAPTER_IMAGE={{ northbound_image_registry }}/{{ northbound_image_names.vendor_adapter }}:{{ northbound_image_tags.vendor_adapter }}
       # CAMARA tenant the Add-asset form defaults to (single-org testbed).
       VITE_CAMARA_ORG={{ camara_org }}
       # Seed tenant account the IAM page points the operator at (phase 08 creates it).

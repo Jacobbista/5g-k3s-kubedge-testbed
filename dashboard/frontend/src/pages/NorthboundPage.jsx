@@ -41,28 +41,28 @@ import {
 // Generic adapters published by 5g-northbound that an operator can deploy on
 // demand; bring-your-own images use the same form. Two kinds, deliberately
 // distinct: a "singleton" is a self-contained source you deploy at most once
-// (wifi-positioning); a "template" is the generic rest-adapter, instantiated
+// (wifi-adapter); a "template" is the generic vendor-adapter, instantiated
 // once PER VENDOR (each gets its own name + REST API), so it can be deployed
 // many times.
 const CATALOG = [
   {
-    name: "wifi-positioning",
+    name: "wifi-adapter",
     // Deploy-time default image; injected from all.yml (northbound_image_tags) via
     // env-config.js. Fallback tracks the same baseline for an un-injected bundle.
-    image: env("VITE_NB_WIFI_IMAGE", "ghcr.io/jacobbista/5g-northbound/wifi-positioning:0.8.15"),
+    image: env("VITE_NB_WIFI_IMAGE", "ghcr.io/jacobbista/5g-northbound/wifi-adapter:0.9.0"),
     kind: "singleton",
     adapterKind: "wifi",
     blurb: "Wi-Fi RSSI positioning source. Deploy one.",
   },
   {
-    name: "rest-adapter",
-    image: env("VITE_NB_REST_ADAPTER_IMAGE", "ghcr.io/jacobbista/5g-northbound/rest-adapter:0.8.18"),
+    name: "vendor-adapter",
+    image: env("VITE_NB_REST_ADAPTER_IMAGE", "ghcr.io/jacobbista/5g-northbound/vendor-adapter:0.9.0"),
     kind: "template",
     adapterKind: "", // per vendor: operator sets it (e.g. uwb for Wittra)
     blurb: "Generic wrapper around a vendor REST API (e.g. Wittra). Deploy one per vendor; name it after the vendor and point it at the vendor API in the env below.",
   },
 ];
-const MANAGED = ["camara-gateway", "positioning-engine", "positioning-demo"];
+const MANAGED = ["camara-gateway", "positioning-engine", "location-app"];
 
 // Engine registry membership/reachability (from GET /adapters `state`): live =
 // heartbeat fresh and polling OK; unreachable = alive but its source/poll fails
@@ -102,7 +102,7 @@ const KIND_BADGE = {
 // field overrides the suffix when present. See docs/security/external-access.md.
 const SUBDOMAIN_SUFFIX = {
   "camara-gateway": "camara",
-  "positioning-demo": "demo",
+  "location-app": "demo",
   "placement-editor": "placement",
   "oauth2-proxy-placement": "placement",
 };
@@ -579,7 +579,7 @@ function AssetsTab({ toast }) {
   };
 
   return (
-    <Panel title="Asset Identity Map" hint="CAMARA private-asset profile: assetId → positioning source. The gateway is the authority (GET/PUT /assets).">
+    <Panel title="Asset Identity Map" hint="CAMARA private-asset profile: assetId → positioning source. The gateway is the authority (GET/PUT /assets). The engine broadcasts each device from its adapter's capability, so an onboarded asset goes live as soon as its adapter reports it.">
       {assets === null ? (
         <p className="text-xs text-slate-500">Loading…</p>
       ) : (
@@ -952,7 +952,7 @@ export default function NorthboundPage() {
                           <span className="rounded bg-amber-950/40 px-1.5 py-0.5 text-[10px] text-amber-300" title="calibration is written in this service's own UI but is NOT PVC-backed yet — it would be lost on restart. Click “enable persistence”.">⟳ not persisted</span>
                         )}
                       </div>
-                      <div className="mt-0.5 flex items-center gap-2 text-[11px] text-slate-500">
+                      <div className="mt-0.5 flex flex-wrap items-center gap-2 text-[11px] text-slate-500">
                         <span className="uppercase tracking-wide">{s.namespace}</span>
                         {s.managed && <span title="managed by Ansible — rolls via Update all / phase 10">· managed</span>}
                         {ep ? (
@@ -960,6 +960,16 @@ export default function NorthboundPage() {
                         ) : s.node_port ? (
                           <span className="shrink-0 font-mono text-[10px]" title="LAN NodePort">:{s.node_port}</span>
                         ) : null}
+                        {/* Push adapter: attached to the n6m 5G data network so an edge
+                            scanner can POST to it. Shows the reserved ingest address. */}
+                        {s.n6m_ip && (
+                          <span
+                            className="shrink-0 rounded bg-teal-950/40 px-1.5 py-0.5 font-mono text-[10px] text-teal-300"
+                            title={`attached to the 5G data network (n6m); edge scanners POST to http://${s.n6m_ip}:8080`}
+                          >
+                            n6m {s.n6m_ip}
+                          </span>
+                        )}
                       </div>
                     </div>
                     {/* Right cluster: status + actions, aligned across every row. */}
@@ -1098,6 +1108,14 @@ export default function NorthboundPage() {
                         {typeof a.last_seen_s_ago === "number" && <span>· seen {Math.round(a.last_seen_s_ago)}s ago</span>}
                         <span className="truncate font-mono">{a.base_url}</span>
                       </div>
+                      {/* Push adapters carry an n6m address: the 5G-reachable ingest the
+                          edge scanner POSTs to (not the ClusterIP). Shown so the operator
+                          can point the scanner at it. */}
+                      {a.n6m_ip && (
+                        <div className="mt-0.5 text-[10px] text-teal-400">
+                          5G ingest: <span className="font-mono">http://{a.n6m_ip}:8080</span> <span className="text-slate-600">(over n6m)</span>
+                        </div>
+                      )}
                     </div>
                     {isAdmin && (dep || canForce) && (
                       <button
@@ -1634,7 +1652,7 @@ function FileDocModal({ service, entry, path, initial, onClose, onSaved }) {
   );
 }
 
-// File-backed contract field (a *_FILE path, e.g. the rest-adapter's SCHEMA_FILE):
+// File-backed contract field (a *_FILE path, e.g. the vendor-adapter's SCHEMA_FILE):
 // shows the current document as a chip; clicking opens FileDocModal to view/edit/
 // replace it. No paste-into-the-form textarea. Generic, driven only by the field
 // being a *_FILE — no service-specific code.
@@ -1735,7 +1753,7 @@ function FileFieldEditor({ service, entry, toast, onApplied, shadowedBy }) {
 function ConfigField({ entry, required, value, onChange, upstreams, service, toast, onApplied, shadowedBy }) {
   // A file field (file_state set by the backend for path-valued *_FILE/*_PATH)
   // the dashboard owns is a document editor. When "external" (a PVC the service
-  // writes itself, e.g. wifi-positioning's bindings/calibration), hands off: plain field.
+  // writes itself, e.g. wifi-adapter's bindings/calibration), hands off: plain field.
   if (entry.file_state && service && entry.file_state !== "external") {
     return <FileFieldEditor service={service} entry={entry} toast={toast} onApplied={onApplied} shadowedBy={shadowedBy} />;
   }
@@ -1825,7 +1843,7 @@ function ConfigureService({ service, services, toast, onClose, onApplied }) {
           }
         }
         // Semi-automatic URL fields: if a *_URL field's expected adapter (its
-        // default host, e.g. "rest-adapter") matches exactly one deployed service
+        // default host, e.g. "vendor-adapter") matches exactly one deployed service
         // by image, pre-select that service. Ambiguous (>1) is left to the picker.
         for (const f of [...(env.recommended || []), ...(env.optional || [])]) {
           if (f.set || f.sensitive || !/_URL$/.test(f.name)) continue;

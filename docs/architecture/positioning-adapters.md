@@ -5,16 +5,16 @@ fuses measurements into a unified position, and a set of adapters that
 each speak to one positioning technology (Wi-Fi RSSI, vendor RTLS, UWB,
 or any future source). Phase 10 (northbound), positioning_engine role,
 deploys the engine plus a standalone
-`mock-positioning` adapter (so the engine exercises the real adapter HTTP
-contract out of the box) and, opt-in, the `placement-editor` geometry UI.
-Real-source adapters (`wifi-positioning`, the generic `rest-adapter`, and
-bring-your-own images) are provisioned at runtime from the dashboard, not by
+`synthetic-adapter` (a Tier-1 synthetic/UWB source that exercises the real
+adapter HTTP contract out of the box) and, opt-in, the `placement-editor`
+geometry UI. Real-source adapters (`wifi-adapter`, the generic `vendor-adapter`,
+and bring-your-own images) are provisioned at runtime from the dashboard, not by
 Ansible.
 
 ## Layers
 
 ```
-[ Pi scanner ] ──POST scan──► [ wifi-positioning ] ──┐
+[ Pi scanner ] ──POST scan──► [ wifi-adapter ] ──────┐
                               own RSSI math + cfg     │
                               GET /measurement/{id}   │
                                                       │  ADAPTER_URLS
@@ -40,11 +40,11 @@ attached.
 
 The HTTP contract that adapters must implement, the request/response
 schemas, the health probe shape, and the reference implementation
-(`wifi-positioning`) all live in the `5g-northbound` monorepo, alongside
+(`wifi-adapter`) all live in the `5g-northbound` monorepo, alongside
 the engine code that consumes them. See:
 
 - `5g-northbound/docs/adapter-contract.md` for the protocol spec
-- `5g-northbound/wifi-positioning/` for the reference implementation
+- `5g-northbound/wifi-adapter/` for the reference implementation
 
 This testbed pulls the published images and orchestrates them; the
 contract itself is owned by the upstream repository so it can evolve
@@ -58,7 +58,7 @@ without a testbed release.
 | `ConfigMap positioning-config` | Engine env: `DEVICE_MAP`, `DEVICE_IDS`, `FUSION_STRATEGY`, `FUSION_COMPARE`, `WEBSOCKET_INTERVAL_MS`, `BLUEPRINT_SEED_PATH`. No static `ADAPTER_URLS`: adapters self-register (an optional seed is rendered only if `engine_adapter_urls` is set) |
 | `Deployment positioning-engine` | Single replica, image from `5g-northbound`, REST + WebSocket on `8080`, embedded mock fallback when `ADAPTER_URLS` is empty |
 | `Service positioning-engine` | ClusterIP plus NodePort `31930` |
-| `Deployment/Service mock-positioning` | Standalone reference mock adapter (ClusterIP); `ADAPTER_URLS` is seeded to it so the engine fuses from a real adapter, not just the embedded fallback |
+| `Deployment/Service synthetic-adapter` | Standalone reference synthetic adapter (ClusterIP), source `synthetic`; the engine discovers it from its `devices` capability so the demo shows live movement out of the box |
 | `PVC positioning-blueprint` | Engine-owned blueprint store, RWO at `/app/data`; only the engine mounts it. The engine serves `GET/PUT /blueprint` |
 | `ConfigMap positioning-blueprint-seed` | Cold-start default room + `gps_origin`, read once via `BLUEPRINT_SEED_PATH` when the blueprint PVC is empty |
 | `Deployment/Service placement-editor` | Opt-in (`placement_editor_enabled`): geometry authoring UI, ClusterIP. A write-client that PUTs the authored blueprint to the engine (`POSITIONING_ENGINE_URL`); mounts no PVC |
@@ -80,6 +80,22 @@ same model the edge Wi-Fi scanner already uses). The blueprint schema, the
 endpoint contract, and the bindings-vs-blueprint split are owned upstream:
 see `5g-northbound/docs/blueprint-vs-bindings.md`.
 
+### Who is broadcast on the live WebSocket
+
+Since engine `0.8.19` the live broadcast set, and each device's `source`, are
+derived from the adapters' `devices` capability
+([API reference](https://jacobbista.github.io/5g-northbound/api-reference/)):
+the engine asks every registered adapter which devices it currently reports and
+broadcasts those, routing each to the adapter that reported it. An onboarded
+asset therefore goes live as soon as its adapter reports it, and there is no
+fan-out fusion across adapters.
+
+`DEVICE_IDS` on the engine is now only a cold-start seed, used when no adapter
+advertises any device; `DEVICE_MAP` is a legacy manual `id=source` override.
+Because the synthetic-adapter advertises the synthetic demo device through the
+same capability, its deployment carries its own `DEVICE_IDS`
+(`engine_device_ids`), otherwise the demo walk would never appear.
+
 ## Adding an adapter
 
 Adapters **self-register** with the engine (v0.6.0). On boot each adapter POSTs
@@ -93,8 +109,8 @@ see `5g-northbound/docs/adapter-registry.md`.
 
 `ADAPTER_URLS` survives only as an optional cold-start **seed** the engine reads
 once when its registry is empty (for an off-cluster adapter that cannot
-self-register); the baseline `mock` self-registers, so the testbed leaves it
-unset. The adapter Deployment must expose `GET /health` (no auth) and
+self-register); the baseline `synthetic-adapter` self-registers, so the testbed
+leaves it unset. The adapter Deployment must expose `GET /health` (no auth) and
 `GET /measurement/{id}` per the public contract.
 
 ### Dashboard provisioning
@@ -114,10 +130,10 @@ touching Ansible:
    (pinned to the worker node) and injects the self-registration env
    (`POSITIONING_ENGINE_URL`, `ADAPTER_NAME`, `ADAPTER_BASE_URL`, and
    `ADAPTER_KIND` when given) so the adapter announces itself. The catalog
-   pre-fills the reference `wifi-positioning`.
+   pre-fills the reference `wifi-adapter`.
 
-2. **No new code: the generic `rest-adapter`.** Deploy the stock
-   `rest-adapter` image, then declare a schema that maps any REST API to the
+2. **No new code: the generic `vendor-adapter`.** Deploy the stock
+   `vendor-adapter` image, then declare a schema that maps any REST API to the
    `Measurement` shape (the adapter persists the schema; the dashboard can
    write it via the adapter's `PUT /schema`). Credentials are mounted from a
    Secret.

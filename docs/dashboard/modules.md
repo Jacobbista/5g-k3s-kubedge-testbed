@@ -162,11 +162,16 @@ open to `dashboard-viewer`; all write controls require `dashboard-admin`.
   (secret-marked vars go into a Secret), optional `imagePullSecret`; the backend
   creates the Deployment + ClusterIP Service and injects the self-registration
   env so the adapter announces itself to the engine. The catalog separates a
-  singleton source (`wifi-positioning`, deployed at most once) from the generic
-  `rest-adapter`, a per-vendor template instantiated once per vendor (name it
+  singleton source (`wifi-adapter`, deployed at most once) from the generic
+  `vendor-adapter`, a per-vendor template instantiated once per vendor (name it
   after the vendor, point it at the vendor API via env). Gated by the backend
   `allow_workload_create` setting on top of admin.
 - Fusion config: edit `FUSION_STRATEGY` / `FUSION_COMPARE` / `DEVICE_MAP`
+- Asset Identity Map: CRUD over the gateway `GET/PUT /assets` (Discover devices
+  onboarding). Since engine `0.8.19` the live broadcast is derived from the
+  adapters' `devices` capability, so an onboarded asset goes live as soon as its
+  adapter reports it - no track-list sync needed; see
+  [architecture/positioning-adapters.md](../architecture/positioning-adapters.md)
 - Managed image rollout: retarget gateway / engine / demo to a new image
 - Adapter contract: the `Measurement` schema, a Python adapter skeleton, an
   `env.contract.yaml` template, and links to the upstream `5g-northbound` docs

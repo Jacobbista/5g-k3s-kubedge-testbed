@@ -10,7 +10,7 @@ default; the umbrella `NORTHBOUND_ENABLED` (`testbed northbound on`) enables it.
 
 | Role | Builds | Flag |
 |------|--------|------|
-| `positioning_engine` | Fusion engine + standalone `mock-positioning` adapter (NodePort `31930`, REST + WebSocket). Owns the blueprint store (PVC at `/app/data`, `GET/PUT /blueprint`, cold-start seed) | `positioning_enabled` |
+| `positioning_engine` | Fusion engine + standalone `synthetic-adapter` adapter (NodePort `31930`, REST + WebSocket). Owns the blueprint store (PVC at `/app/data`, `GET/PUT /blueprint`, cold-start seed) | `positioning_enabled` |
 | `camara_gateway` | CAMARA Location API gateway, validates Bearer tokens against the realm, forwards to the engine (NodePort `31920`) | `camara_enabled` |
 | `placement_editor` | Room-geometry UI, a write-client that PUTs the blueprint to the engine (no PVC), **always** behind its Keycloak front-door gate (includes `frontdoor_gate`) | `placement_editor_enabled` |
 | `frontdoor_gate` | Generic oauth2-proxy that gives any no-auth UI a Keycloak login + group authorization (parameterized on `gate_*`) | included by callers |
@@ -37,7 +37,7 @@ Common overrides (else read from env, then lab defaults):
 ```bash
 ansible-playbook phases/10-northbound/playbook.yml \
   -e camara_client_secret='<strong>' \
-  -e engine_adapter_urls='wifi=http://wifi-positioning.positioning.svc.cluster.local:8080'
+  -e engine_adapter_urls='wifi=http://wifi-adapter.positioning.svc.cluster.local:8080'
 ```
 
 ## Endpoints exposed
@@ -89,7 +89,7 @@ or ConfigMap. See [docs/dashboard/modules.md](../../../docs/dashboard/modules.md
 
 ## Adapters and contracts
 
-Concrete adapters (`wifi-positioning`, the generic `rest-adapter`, vendor or
+Concrete adapters (`wifi-adapter`, the generic `vendor-adapter`, vendor or
 bring-your-own images) are not provisioned here; they are added at runtime from
 the dashboard Northbound console, following the public HTTP adapter contract. See
 [docs/architecture/positioning-adapters.md](../../../docs/architecture/positioning-adapters.md).

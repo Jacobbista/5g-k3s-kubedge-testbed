@@ -1,13 +1,13 @@
 apiVersion: v1
 kind: Service
 metadata:
-  name: positioning-demo
+  name: location-app
   namespace: {{ demo_namespace }}
   labels:
-    app: positioning-demo
+    app: location-app
 spec:
   selector:
-    app: positioning-demo
+    app: location-app
   ports:
     - protocol: TCP
       port: 80

@@ -18,6 +18,28 @@ class Settings(BaseSettings):
 
     worker_ssh_host: str = "worker"
     shell_timeout_seconds: int = 10
+
+    # n6m (5G MEC data network) attachment for PUSH positioning adapters. An edge
+    # scanner POSTs observations over 5G, so a push adapter must be reachable on
+    # n6m; the deploy path auto-attaches each listed adapter at its reserved IP.
+    # Values plumbed from all.yml (n6m_push_adapters, nad_n6m_*) by phase 09.
+    # n6m_push_adapters is a compact "name=cidr,name=cidr" string.
+    n6m_nad_name: str = "n6m-net"
+    n6m_nad_namespace: str = "mec"
+    n6m_push_adapters: str = ""
+
+    def n6m_push_adapter_map(self) -> dict[str, str]:
+        """Parse n6m_push_adapters into {adapter_name: cidr}. Malformed entries
+        are skipped, so a typo in config never breaks a deploy."""
+        out: dict[str, str] = {}
+        for pair in self.n6m_push_adapters.split(","):
+            pair = pair.strip()
+            if "=" in pair:
+                name, cidr = pair.split("=", 1)
+                name, cidr = name.strip(), cidr.strip()
+                if name and cidr:
+                    out[name] = cidr
+        return out
     shell_max_output_bytes: int = 1_000_000
 
     prometheus_url: str = "http://192.168.56.11:30090"

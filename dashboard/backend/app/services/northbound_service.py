@@ -20,6 +20,7 @@ from typing import Any
 
 import httpx
 
+from app.config import settings
 from app.models import DeployEnvVar, DeployImageRequest, FusionConfigPayload
 from app.services.k8s_service import K8sService
 from app.services.nf_service import ANSIBLE_CFG, ANSIBLE_DIR, ANSIBLE_PLAYBOOK_BIN
@@ -42,17 +43,17 @@ PHASE10_PLAYBOOK = f"{ANSIBLE_DIR}/phases/10-northbound/playbook.yml"
 # See docs/development/contributing.md "Component image versions".
 COMPANION_PREFIX = "ghcr.io/jacobbista/5g-northbound/"
 # Phase-10-managed image basename -> the env var its role default reads (lookup env).
-# The rest (wifi-positioning, rest-adapter) are catalog adapters rolled via kubectl set,
+# The rest (wifi-adapter, vendor-adapter) are catalog adapters rolled via kubectl set,
 # so they need no env var.
 COMPANION_TAG_VARS = {
     "positioning-engine": "POSITIONING_ENGINE_TAG",
-    "mock-positioning": "MOCK_POSITIONING_TAG",
+    "synthetic-adapter": "SYNTHETIC_ADAPTER_TAG",
     "camara-gateway": "CAMARA_GATEWAY_TAG",
     "placement-editor": "PLACEMENT_EDITOR_TAG",
-    "positioning-demo": "POSITIONING_DEMO_TAG",
+    "location-app": "LOCATION_APP_TAG",
 }
 PHASE_MANAGED_BASENAMES = set(COMPANION_TAG_VARS)
-CATALOG_BASENAMES = {"wifi-positioning", "rest-adapter"}
+CATALOG_BASENAMES = {"wifi-adapter", "vendor-adapter"}
 # Per-repo latest-tag cache (repo path -> (ts, tag|None)); the badge polls versions().
 _GHCR_CACHE: dict[str, tuple[float, str | None]] = {}
 _GHCR_TTL = 300.0
@@ -87,7 +88,7 @@ _CONTRACT_META: dict[tuple, dict] = {}
 MANAGED_DEPLOYMENTS = {
     "camara-gateway": "camara",
     "positioning-engine": "positioning",
-    "positioning-demo": "mec",
+    "location-app": "mec",
 }
 
 # Consumers whose <field> should point at a deployed adapter of <kind> (the
@@ -95,20 +96,20 @@ MANAGED_DEPLOYMENTS = {
 # not yet wired into the consumer and offer a one-click bind (binding_suggestions).
 _ADAPTER_BINDINGS = {
     "placement-editor": [
-        {"field": "REST_ADAPTER_URL", "kind": "rest-adapter"},
-        {"field": "WIFI_POSITIONING_URL", "kind": "wifi-positioning"},
+        {"field": "VENDOR_ADAPTER_URL", "kind": "vendor-adapter"},
+        {"field": "WIFI_ADAPTER_URL", "kind": "wifi-adapter"},
     ],
 }
 
 
 def _image_basename(image: str | None) -> str:
-    """ghcr.io/jacobbista/5g-northbound/rest-adapter:0.8.6 -> rest-adapter."""
+    """ghcr.io/jacobbista/5g-northbound/vendor-adapter:0.8.6 -> vendor-adapter."""
     return (image or "").rsplit("/", 1)[-1].split("@")[0].split(":")[0]
 
 
 def _adapter_probes(port: int) -> dict[str, Any]:
     """Readiness on /ready (config-aware: 503 + reason while degraded, e.g. a
-    rest-adapter with no schema, so the dashboard shows it NOT ready instead of falsely
+    vendor-adapter with no schema, so the dashboard shows it NOT ready instead of falsely
     green); liveness on /health (process up). Every 5g-northbound adapter and the SDK
     skeleton expose both. Applied on deploy AND upgrade, so a rolled-forward adapter
     also gets the honest probe. See docs/architecture/positioning-adapters.md."""
@@ -121,7 +122,7 @@ def _adapter_probes(port: int) -> dict[str, Any]:
 
 
 def _image_tag(image: str | None) -> str:
-    """...rest-adapter:0.8.6 -> 0.8.6 (empty when digest-pinned or untagged)."""
+    """...vendor-adapter:0.8.6 -> 0.8.6 (empty when digest-pinned or untagged)."""
     tail = (image or "").rsplit("/", 1)[-1]
     return tail.split(":", 1)[1] if ":" in tail else ""
 
@@ -176,13 +177,13 @@ def _ghcr_latest_in_major(repo_path: str, major: int) -> str | None:
 # the env var by which the service is told where to read/write that document, `path`
 # is the image default (only its basename is used). The store redirects `env` to a
 # file inside STORE_DIR (see _ensure_writable_store) rather than mounting over the
-# default path, so no subPath is needed. wifi-positioning persists its calibration
+# default path, so no subPath is needed. wifi-adapter persists its calibration
 # (tx_power/path_loss_n) into WIFI_CONFIG_PATH. SCHEMA_FILE is writable upstream but
 # operator-authored here (no runtime writer), so it stays a ConfigMap.
 # See docs/architecture/positioning-adapters.md and
 # docs/known-issues/wifi-calibration-subpath-directory.md.
 _STATEFUL_DOCS = {
-    "wifi-positioning": {"env": "WIFI_CONFIG_PATH", "path": "/app/config/wifi-config.json"},
+    "wifi-adapter": {"env": "WIFI_CONFIG_PATH", "path": "/app/config/wifi-config.json"},
 }
 # Dedicated directory the writable PVC is mounted at (whole-dir mount, no subPath).
 STORE_DIR = "/data"
@@ -190,7 +191,7 @@ STORE_DIR = "/data"
 
 def _is_file_field(name: str | None, path: str | None) -> bool:
     """A document the operator/portal PROVIDES, by convention named *_FILE with an
-    absolute-path value (e.g. the rest-adapter's SCHEMA_FILE). Deliberately NOT
+    absolute-path value (e.g. the vendor-adapter's SCHEMA_FILE). Deliberately NOT
     *_PATH: those (e.g. the engine's BLUEPRINT_SEED_PATH) are paths the service
     READS from a managed/distributed source, not an operator document — those are a
     seed/distribution concern, not a paste-a-file one."""
@@ -258,6 +259,7 @@ class NorthboundService:
     # ── Inventory ────────────────────────────────────────────────────────────
     def inventory(self) -> dict[str, Any]:
         services: list[dict[str, Any]] = []
+        push_map = settings.n6m_push_adapter_map()
         for ns in NORTHBOUND_NAMESPACES:
             try:
                 deps = self.k8s.apps.list_namespaced_deployment(namespace=ns).items
@@ -280,7 +282,7 @@ class NorthboundService:
                 name = dep.metadata.name
                 labels = dep.metadata.labels or {}
                 # Edge apps (phase 12) share the `mec` namespace with northbound's
-                # positioning-demo; exclude them so this console lists only
+                # location-app; exclude them so this console lists only
                 # positioning/CAMARA services. See docs/architecture/edge-apps.md.
                 if labels.get("app.kubernetes.io/managed-by") == "dashboard-apps":
                     continue
@@ -319,7 +321,7 @@ class NorthboundService:
                         # until it serves its contract (just-deployed adapters).
                         if ready:
                             _CONTRACT_META[(name, image)] = meta
-                # Stateful adapters (wifi-positioning) write a doc at runtime that must be
+                # Stateful adapters (wifi-adapter) write a doc at runtime that must be
                 # PVC-backed. `persistent` = the b2 store is attached (PVC mounted at
                 # STORE_DIR), so the UI can flag an ephemeral calibration and offer a
                 # one-click enable. An old subPath store reads as not-persistent → it gets
@@ -345,6 +347,10 @@ class NorthboundService:
                     "stateful": stateful,
                     "persistent": persistent,
                     "pods": dep_pods,
+                    # Push adapters carry a reserved n6m address: the 5G-reachable
+                    # ingest an edge scanner POSTs to. Bare IP (no mask), present
+                    # only when configured.
+                    "n6m_ip": (push_map[name].split("/", 1)[0] if name in push_map else None),
                 })
         return {"services": services}
 
@@ -358,9 +364,18 @@ class NorthboundService:
         try:
             raw = self.k8s.service_proxy_get(POSITIONING_NS, ENGINE_SERVICE, ENGINE_PORT, "adapters")
             data = json.loads(raw) if isinstance(raw, str) else (raw or {})
-            return data.get("adapters", [])
+            adapters = data.get("adapters", [])
         except Exception:
             return []
+        # Annotate push adapters with their 5G ingest address so the UI can show
+        # the edge scanner where to POST. The IP is the reserved n6m address; the
+        # scanner reaches it over the 5G user plane (via the UPF), not the ClusterIP.
+        push = settings.n6m_push_adapter_map()
+        for a in adapters:
+            cidr = push.get(a.get("name"))
+            if cidr:
+                a["n6m_ip"] = cidr.split("/", 1)[0]
+        return adapters
 
     # ── Asset Identity Map (the gateway is the authority: GET/PUT /assets) ─────
     # /assets enforces a CAMARA JWT, so unlike the engine reads we cannot use the
@@ -403,13 +418,21 @@ class NorthboundService:
 
     def put_assets(self, token: str, body: dict[str, Any]) -> dict[str, Any]:
         """Replace the Asset Identity Map (PUT /assets). The dashboard sends the full
-        set (load-all, edit, save-all); the gateway validates against asset.schema.json."""
+        set (load-all, edit, save-all); the gateway validates against asset.schema.json.
+
+        Since engine 0.8.19 the live broadcast set (and each device's source) is derived
+        from the adapters' `devices` capability, so an onboarded asset appears on the map
+        as soon as its adapter reports it. No DEVICE_IDS bridge is needed."""
         try:
             resp = httpx.put(f"{self._gateway_base_url()}/assets", headers=self._bearer(token), json=body, timeout=8.0)
             resp.raise_for_status()
         except httpx.HTTPStatusError as exc:
             raise GatewayError(exc.response.status_code, exc.response.text)
-        return {"status": "applied", "count": len((body or {}).get("assets", []))}
+        assets = list((body or {}).get("assets") or [])
+        return {
+            "status": "applied",
+            "count": len(assets),
+        }
 
     def unregister_adapter(self, name: str) -> dict[str, Any]:
         """Force-remove an adapter from the engine registry (DELETE /adapters/{name}).
@@ -454,7 +477,7 @@ class NorthboundService:
         # never reach the pod). Inline env and volumes are left untouched.
         self.k8s.set_workload_image(POSITIONING_NS, name, image, envfrom=[cm_name, f"{name}-secrets"],
                                     probes=_adapter_probes(port))
-        # Stateful adapters (wifi-positioning writes its calibration) get a PVC-backed
+        # Stateful adapters (wifi-adapter writes its calibration) get a PVC-backed
         # store so the writes survive this rollout and future ones. Attached
         # unconditionally: the store must exist for a UI/imported calibration to persist,
         # so it cannot depend on a prior Configure (the <name>-files seed is optional,
@@ -678,6 +701,21 @@ class NorthboundService:
             pod_spec["imagePullSecrets"] = [{"name": image_pull_secret}]
 
         labels = {"app": name, "app.kubernetes.io/managed-by": "dashboard-northbound"}
+        # Push adapters (edge scanner POSTs over 5G) are useless without an n6m
+        # foothold, so attach one automatically at the reserved IP from config.
+        # Cross-namespace NAD reference: the adapter lives here (positioning) but
+        # the n6m-net NAD lives in the mec namespace. Pull adapters are not in the
+        # map and get no n6m interface. See docs/architecture/positioning-adapters.md.
+        pod_meta: dict[str, Any] = {"labels": labels}
+        n6m_cidr = settings.n6m_push_adapter_map().get(name)
+        if n6m_cidr:
+            net = {
+                "name": settings.n6m_nad_name,
+                "namespace": settings.n6m_nad_namespace,
+                "interface": "n6m",
+                "ips": [n6m_cidr],
+            }
+            pod_meta["annotations"] = {"k8s.v1.cni.cncf.io/networks": json.dumps([net])}
         self.k8s.upsert_deployment(ns, {
             "apiVersion": "apps/v1",
             "kind": "Deployment",
@@ -685,7 +723,7 @@ class NorthboundService:
             "spec": {
                 "replicas": 1,
                 "selector": {"matchLabels": {"app": name}},
-                "template": {"metadata": {"labels": labels}, "spec": pod_spec},
+                "template": {"metadata": pod_meta, "spec": pod_spec},
             },
         })
         self.k8s.upsert_service(ns, {
@@ -715,13 +753,13 @@ class NorthboundService:
             DeployEnvVar(name="ADAPTER_BASE_URL", value=base_url),
         ]
         # Only override ADAPTER_KIND when the operator chose one; otherwise let the
-        # adapter image keep its own default (e.g. wifi-positioning -> "wifi").
+        # adapter image keep its own default (e.g. wifi-adapter -> "wifi").
         if req.kind:
             self_reg.append(DeployEnvVar(name="ADAPTER_KIND", value=req.kind))
         have = {e.name for e in req.env}
         env = list(req.env) + [e for e in self_reg if e.name not in have]
         self._apply_workload(POSITIONING_NS, req.name, req.image, req.port, env, req.image_pull_secret)
-        # Stateful adapters (wifi-positioning writes its calibration at runtime) get a
+        # Stateful adapters (wifi-adapter writes its calibration at runtime) get a
         # PVC-backed store at deploy time, so a calibration set/imported in the adapter's
         # OWN UI persists across restart/upgrade with no prior dashboard Configure. The
         # service starts with an empty store and creates the file on first write.
@@ -1049,8 +1087,8 @@ class NorthboundService:
         deployed adapters of the matching kind. Lets the UI show the association
         at a glance, auto-bind the unambiguous single-adapter case, and offer a
         switcher when more than one adapter of a kind is deployed. The consumer
-        field is single-valued (e.g. placement-editor's REST_ADAPTER_URL points at
-        ONE rest-adapter), so >1 candidate is a choice, not an auto-bind."""
+        field is single-valued (e.g. placement-editor's VENDOR_ADAPTER_URL points at
+        ONE vendor-adapter), so >1 candidate is a choice, not an auto-bind."""
         services = self.inventory().get("services", [])
         out: list[dict[str, Any]] = []
         for consumer, fields in _ADAPTER_BINDINGS.items():
@@ -1083,7 +1121,7 @@ class NorthboundService:
         return {"bindings": out}
 
     # ── File-backed config (generic, declarative, reproducible) ────────────────
-    # A contract var named like a path (`*_FILE`, e.g. the rest-adapter's
+    # A contract var named like a path (`*_FILE`, e.g. the vendor-adapter's
     # SCHEMA_FILE) means the service reads a DOCUMENT from that path, not a scalar.
     # Rather than an ephemeral in-pod write, the dashboard
     # stores every such document in ONE `<name>-files` ConfigMap and mounts each at
@@ -1178,7 +1216,7 @@ class NorthboundService:
             return False
 
     def enable_persistence(self, name: str) -> dict[str, Any]:
-        """Attach the PVC-backed writable store to a stateful adapter (wifi-positioning),
+        """Attach the PVC-backed writable store to a stateful adapter (wifi-adapter),
         so a calibration set in its OWN UI survives restart/upgrade. One-click bridge for
         an instance deployed before deploy-time attach; new deploys get it automatically.
         The rollout reuses any existing store (idempotent)."""
@@ -1233,7 +1271,7 @@ class NorthboundService:
         """Per configurable service, what is still missing for it to function: any
         required env var unset, plus any *_FILE document field with nothing mounted
         at its path. Lets the UI flag a box that still needs configuration (e.g. a
-        rest-adapter with no vendor schema). A *_FILE counts as satisfied when ANY
+        vendor-adapter with no vendor schema). A *_FILE counts as satisfied when ANY
         volume is mounted there (our schema ConfigMap, or a PVC the service writes
         itself), so PVC-managed files don't flag."""
         out: dict[str, Any] = {}

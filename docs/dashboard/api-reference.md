@@ -131,6 +131,10 @@ See [RAN Modes](../deployment/ran-modes-dashboard.md) for the full workflow.
 | DELETE | `/api/v1/northbound/adapters/{name}` | ✅ Admin | Force-remove a stale registry entry (engine `DELETE /adapters/{name}`). Adapters self-register, so there is no manual register endpoint |
 | POST | `/api/v1/northbound/deploy` | ✅ Admin | Deploy a custom adapter image. Requires `DASHBOARD_ALLOW_WORKLOAD_CREATE=true`. Body: `{name, image, port, env[], image_pull_secret?, kind?}`. The backend injects the self-registration env so the adapter announces itself to the engine |
 | DELETE | `/api/v1/northbound/workloads/{name}` | ✅ Admin | Delete a deploy-from-image adapter (Deployment, Service, Secret) and unregister it |
+| GET | `/api/v1/northbound/assets` | ✅ Admin | Asset Identity Map from the gateway (`GET /assets`); Bearer forwarded |
+| PUT | `/api/v1/northbound/assets` | ✅ Admin | Replace the Asset Map (`PUT /assets`); Bearer forwarded. The engine broadcasts each device from its adapter's capability, so onboarded assets go live without a track-list sync |
+| GET | `/api/v1/northbound/assets/discoverable` | ✅ Admin | Gateway discoverable candidates (not yet onboarded) |
+| GET | `/api/v1/northbound/assets/{asset_id}/details` | ✅ Admin | Gateway per-asset details |
 | PUT | `/api/v1/northbound/fusion` | ✅ Admin | Update engine fusion config. Body: `{strategy?, compare?, device_map?}` |
 | POST | `/api/v1/northbound/managed/{deployment}/image` | ✅ Admin | Retarget a managed deployment (gateway/engine/demo) to a new image. Body: `{image}` |
 

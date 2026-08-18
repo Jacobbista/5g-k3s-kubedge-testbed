@@ -109,6 +109,19 @@ nad_n6m_name: n6m-net
 n6m_interface_expected: n6m
 n6m_interface_regex: "^(n6m|net[0-9]+)$"
 
+# Push positioning adapters: an edge scanner (e.g. a robot) POSTs its raw
+# observations to the adapter over the 5G data network, so a push adapter is
+# useless unless it is reachable on n6m. The dashboard auto-attaches each listed
+# adapter to n6m at its reserved static IP when deployed, and surfaces the ingest
+# address in the UI. Pull adapters (vendor-API / simulated, e.g. wittra, synthetic)
+# are NOT listed: they source data themselves and need no n6m path.
+# IPs come from the n6m reserved band: the NAD excludes 10.208.0.200/29 from the
+# whereabouts dynamic pool for exactly these static assignments. 10.208.0.200 is
+# taken by the face-recognition edge app. Map is adapter deploy-name -> CIDR.
+# See docs/architecture/positioning-adapters.md.
+n6m_push_adapters:
+  wifi-adapter: "10.208.0.201/24"
+
 # VXLAN VNIs per 5G interface (overlay keys). Consumed by ovs-setup.sh via the
 # OVS DaemonSet env. n6m_vni is defined in the N6 MEC block above.
 n1_vni: 101
@@ -254,14 +267,32 @@ nf_images:
 #   these values can be aligned. Nothing else holds a version.
 # Source: https://github.com/Jacobbista/5g-northbound
 northbound_image_registry: "ghcr.io/jacobbista/5g-northbound"
+# v0.9.0 renamed four images (service/DNS names follow the image): mock-positioning
+# → synthetic-adapter (now a Tier-1 synthetic/UWB source, not a mock), wifi-positioning
+# → wifi-adapter, rest-adapter → vendor-adapter, positioning-demo → location-app. The
+# old names stop at 0.8.x. mock-wittra → mock-vendor is compose-only, never in-cluster.
+#
+# Two maps, same keys, declared once here so a rename touches ONE place (AGENTS.md:
+# never hardcode an image name in a role/template). `northbound_image_names` is the
+# ghcr repository basename; `northbound_image_tags` is the baseline version. Role
+# defaults build `<registry>/<name>:<tag>` from these and layer the per-image env
+# override + effective-tag reconciliation on top; nothing restates the name.
+northbound_image_names:
+  positioning_engine: positioning-engine
+  camara_gateway:     camara-gateway
+  placement_editor:   placement-editor
+  synthetic_adapter:  synthetic-adapter
+  wifi_adapter:       wifi-adapter
+  vendor_adapter:     vendor-adapter
+  location_app:       location-app
 northbound_image_tags:
-  positioning_engine: "0.8.15"
-  mock_positioning:   "0.8.15"
-  camara_gateway:     "0.8.15"
-  placement_editor:   "0.8.17"
-  positioning_demo:   "0.8.12"
-  wifi_positioning:   "0.8.15"
-  rest_adapter:       "0.8.18"
+  positioning_engine: "0.9.0"
+  camara_gateway:     "0.9.0"
+  placement_editor:   "0.9.0"
+  synthetic_adapter:  "0.9.0"
+  wifi_adapter:       "0.9.0"
+  vendor_adapter:     "0.9.0"
+  location_app:       "0.9.0"
 
 # ── Dashboard images ─────────────────────────────────────────────────────────
 # The frontend is application code with a release process: a `dashboard-frontend-v<semver>`

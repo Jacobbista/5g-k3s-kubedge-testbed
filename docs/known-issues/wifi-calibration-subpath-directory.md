@@ -2,7 +2,7 @@
 
 A Kubernetes `volumeMount` with `subPath` pointing at a file that does not yet exist
 in the backing volume makes the kubelet create that subPath entry as a **directory**.
-A stateful adapter (e.g. `wifi-positioning`, which writes its calibration to the file
+A stateful adapter (e.g. `wifi-adapter`, which writes its calibration to the file
 named by `WIFI_CONFIG_PATH`) then finds a directory where it expects a file and cannot
 read or write it, so it degrades. The calibration store starts empty (no seed), which
 is exactly the case that triggers this.

@@ -1,26 +1,26 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: mock-positioning
+  name: synthetic-adapter
   namespace: {{ positioning_namespace }}
   labels:
-    app: mock-positioning
+    app: synthetic-adapter
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: mock-positioning
+      app: synthetic-adapter
   template:
     metadata:
       labels:
-        app: mock-positioning
+        app: synthetic-adapter
     spec:
       nodeSelector:
         kubernetes.io/hostname: worker
       terminationGracePeriodSeconds: 15
       containers:
-        - name: mock-positioning
-          image: {{ mock_positioning_image }}
+        - name: synthetic-adapter
+          image: {{ synthetic_adapter_image }}
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 8080
@@ -28,7 +28,7 @@ spec:
               protocol: TCP
           env:
             - name: SOURCE
-              value: "mock"
+              value: "synthetic"
             # v0.6.0 self-registration: the adapter announces itself to the engine
             # (POST /adapters) at boot + heartbeats, and the engine evicts it on TTL
             # if it stops. No static ADAPTER_URLS on the engine. See docs/adapter-registry.md
@@ -36,17 +36,25 @@ spec:
             - name: POSITIONING_ENGINE_URL
               value: "http://positioning-engine.{{ positioning_namespace }}.svc.cluster.local:8080"
             - name: ADAPTER_NAME
-              value: "mock"
+              value: "synthetic"
             - name: ADAPTER_BASE_URL
-              value: "http://mock-positioning.{{ positioning_namespace }}.svc.cluster.local:8080"
+              value: "http://synthetic-adapter.{{ positioning_namespace }}.svc.cluster.local:8080"
             - name: ADAPTER_KIND
-              value: "mock"
+              value: "synthetic"
             # v0.7.0 capabilities: the adapter advertises what it can locate so the
-            # gateway aggregates it into GET /capabilities. JSON form of the mock's
+            # gateway aggregates it into GET /capabilities. JSON form of the adapter's
             # adapter.contract.yaml (kept in sync; `make positioning-check` asserts
             # they agree). See docs/architecture/positioning-adapters.md.
             - name: ADAPTER_CAPABILITIES
-              value: '{"source":"mock","kinds":["forklift","asset"],"frame":"local","streaming":false,"z":true,"accuracy_class":"coarse"}'
+              value: '{"source":"synthetic","kinds":["forklift","asset"],"frame":"local","streaming":false,"z":true,"accuracy_class":"coarse"}'
+            # v0.8.19 broadcast-from-capability: the engine derives the live broadcast set
+            # (and each device's source) from the adapters' `devices` capability, not from
+            # its own DEVICE_IDS (now seed-only, suppressed when any adapter advertises).
+            # The synthetic adapter must therefore advertise its demo device itself, else it
+            # never walks on the live map. Same single source as the engine seed and the
+            # CAMARA asset seed (engine_device_ids). See docs/architecture/positioning-adapters.md.
+            - name: DEVICE_IDS
+              value: "{{ engine_device_ids }}"
             # Room bounds for the random walk; kept in sync with the engine floor plan.
             - name: WIDTH_M
               value: "{{ floor_width_m }}"

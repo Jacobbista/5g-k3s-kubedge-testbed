@@ -213,7 +213,7 @@ front-door NodePort changes.
 | `kelt-dashboard.<base>` | `dashboard-frontend.dashboard:80` (also `/auth` `/api` `/docs`) | Operators (dashboard) |
 | `kelt-dev.<base>` | ansible VM `:31573` (Vite) | Frontend developers (opt-in) |
 | `kelt-camara.<base>` | `camara-gateway.camara:8080` | M2M CAMARA API consumers |
-| `kelt-demo.<base>` | `positioning-demo.mec:80` | End users (positioning demo) |
+| `kelt-demo.<base>` | `location-app.mec:80` | End users (positioning demo) |
 | `kelt-placement.<base>` | `oauth2-proxy-placement.positioning:4180` | Editors (placement-editor, behind the front-door gate) |
 | `kelt-<app>.<base>` | `<app>.mec:80` (dynamic, when `apps_enabled`) | Edge-app users; unknown/down → branded 404 |
 | `kelt-gnb.<base>` | external gNB appliance (dashboard-registered Service+Endpoints in `mec`, when set) | Admins (femtocell management UI) |

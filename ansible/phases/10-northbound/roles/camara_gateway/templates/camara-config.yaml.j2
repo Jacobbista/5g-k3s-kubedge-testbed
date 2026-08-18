@@ -18,10 +18,10 @@ data:
   # See docs/architecture/positioning-adapters.md.
   ASSET_STORE_FILE: "{{ camara_asset_store_file }}"
   ASSET_SEED_FILE: "{{ camara_asset_seed_file }}"
-  # Optional: internal URL of the catalog wifi-positioning adapter. When set, the
-  # gateway proxies GET /anchors/calibration so the demo reads real per-AP RF.
+  # Optional: internal URL of the catalog wifi-adapter. When set, the gateway
+  # proxies GET /anchors/calibration so the demo reads real per-AP RF.
   # Empty disables the extension.
-  WIFI_POSITIONING_URL: "{{ camara_wifi_positioning_url }}"
+  WIFI_ADAPTER_URL: "{{ camara_wifi_adapter_url }}"
   # Reachability metadata only (the gateway does not read this); the deploy portal
   # tracks the gateway public origin under this name.
   CAMARA_GATEWAY_EXTERNAL_ORIGIN: "{{ camara_gateway_external_origin }}"

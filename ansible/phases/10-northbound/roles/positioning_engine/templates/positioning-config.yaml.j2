@@ -8,7 +8,7 @@ data:
   # (POST /adapters) and heartbeat; the engine is the registry authority and
   # evicts dead self-registrations on TTL. ADAPTER_URLS is now only a cold-start
   # SEED the engine reads once when its registry is empty (for off-cluster adapters
-  # that cannot self-register); the baseline mock self-registers, so it is unset
+  # that cannot self-register); the baseline synthetic adapter self-registers, so it is unset
   # here. See docs/adapter-registry.md (5g-northbound) and positioning-adapters.md.
 {% if engine_adapter_urls %}
   ADAPTER_URLS: "{{ engine_adapter_urls }}"

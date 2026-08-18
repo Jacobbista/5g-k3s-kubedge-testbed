@@ -1,7 +1,7 @@
 ---
 # POSITIONING ENGINE
 #
-# Provisions the engine backbone plus the standalone mock adapter. The engine is
+# Provisions the engine backbone plus the standalone synthetic adapter. The engine is
 # the thin fusion layer that polls one or more positioning adapters via HTTP and
 # exposes a unified Position to the CAMARA gateway. Concrete adapters (wifi-
 # positioning, vendor-specific) are NOT deployed here; they are added at runtime
@@ -35,16 +35,16 @@
   until: prepull_pos.rc == 0
   failed_when: false   # best-effort warm-up; Deployment pulls on demand (no hard-fail on a registry/DNS blip)
 
-- name: Pre-pull mock-positioning image on worker
+- name: Pre-pull synthetic-adapter image on worker
   command: >
-    k3s ctr -n k8s.io images pull {{ mock_positioning_image }}
+    k3s ctr -n k8s.io images pull {{ synthetic_adapter_image }}
   delegate_to: "{{ groups['workers'][0] }}"
   run_once: true
   changed_when: false
-  register: prepull_mock
+  register: prepull_synthetic
   retries: 3
   delay: 5
-  until: prepull_mock.rc == 0
+  until: prepull_synthetic.rc == 0
   failed_when: false   # best-effort warm-up; Deployment pulls on demand (no hard-fail on a registry/DNS blip)
 
 - name: Apply positioning-config ConfigMap
@@ -81,23 +81,23 @@
   run_once: true
   register: pos_seed_apply
 
-# Standalone mock adapter (lean baseline): created before the engine so the
-# engine has a live adapter at the seeded ADAPTER_URLS on first poll.
-- name: Deploy mock-positioning adapter Deployment
+# Standalone synthetic adapter (lean baseline): created before the engine so the
+# engine has a live adapter self-registered on first poll.
+- name: Deploy synthetic-adapter Deployment
   kubernetes.core.k8s:
     state: present
     apply: true
     force: true
     kubeconfig: "{{ kubeconfig_path }}"
-    definition: "{{ lookup('template', role_path + '/templates/mock-positioning-deployment.yaml.j2') | from_yaml }}"
+    definition: "{{ lookup('template', role_path + '/templates/synthetic-adapter-deployment.yaml.j2') | from_yaml }}"
   delegate_to: "{{ groups['masters'][0] }}"
   run_once: true
 
-- name: Deploy mock-positioning adapter Service
+- name: Deploy synthetic-adapter Service
   kubernetes.core.k8s:
     state: present
     kubeconfig: "{{ kubeconfig_path }}"
-    definition: "{{ lookup('template', role_path + '/templates/mock-positioning-service.yaml.j2') | from_yaml }}"
+    definition: "{{ lookup('template', role_path + '/templates/synthetic-adapter-service.yaml.j2') | from_yaml }}"
   delegate_to: "{{ groups['masters'][0] }}"
   run_once: true
 
@@ -163,12 +163,12 @@
 - name: Display positioning engine summary
   debug:
     msg:
-      - "Positioning engine + mock-positioning adapter deployed"
+      - "Positioning engine + synthetic-adapter deployed"
       - "REST: http://{{ hostvars[groups['workers'][0]]['ansible_host'] }}:{{ positioning_engine_nodeport }}"
       - "WebSocket: ws://{{ hostvars[groups['workers'][0]]['ansible_host'] }}:{{ positioning_engine_nodeport }}/ws/positions"
       - "Adapters: self-register with the engine (GET /adapters for the live registry){{ ' | seed: ' ~ engine_adapter_urls if engine_adapter_urls else '' }}"
       - "FUSION_STRATEGY: {{ engine_fusion_strategy }}{{ ' (compare: ' ~ engine_fusion_compare ~ ')' if engine_fusion_compare else '' }}"
       - "DEVICE_IDS: {{ engine_device_ids }}"
-      - "Adapters appear automatically when deployed (mock baseline self-registers; wifi-positioning/rest-adapter from the dashboard catalog)"
+      - "Adapters appear automatically when deployed (synthetic baseline self-registers; wifi-adapter/vendor-adapter from the dashboard catalog)"
   delegate_to: "{{ groups['masters'][0] }}"
   run_once: true

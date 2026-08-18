@@ -4,7 +4,7 @@
 
 - name: Pre-pull positioning demo image on worker
   command: >
-    k3s ctr -n k8s.io images pull {{ positioning_demo_image }}
+    k3s ctr -n k8s.io images pull {{ location_app_image }}
   delegate_to: "{{ groups['workers'][0] }}"
   run_once: true
   changed_when: false
@@ -14,7 +14,7 @@
   until: prepull_demo.rc == 0
   failed_when: false   # best-effort warm-up; Deployment pulls on demand (no hard-fail on a registry/DNS blip)
 
-- name: Apply positioning-demo-config ConfigMap (browser env for envFrom)
+- name: Apply location-app-config ConfigMap (browser env for envFrom)
   kubernetes.core.k8s:
     state: present
     apply: true
@@ -24,7 +24,7 @@
   delegate_to: "{{ groups['masters'][0] }}"
   run_once: true
 
-- name: Apply positioning-demo-nginx ConfigMap (reverse-proxy + /contract route)
+- name: Apply location-app-nginx ConfigMap (reverse-proxy + /contract route)
   kubernetes.core.k8s:
     state: present
     apply: true
@@ -56,7 +56,7 @@
   kubernetes.core.k8s_info:
     api_version: apps/v1
     kind: Deployment
-    name: positioning-demo
+    name: location-app
     namespace: "{{ demo_namespace }}"
     kubeconfig: "{{ kubeconfig_path }}"
   register: demo_deploy
@@ -71,7 +71,7 @@
 - name: Display demo app summary
   debug:
     msg:
-      - "Positioning demo deployed"
+      - "Location app (positioning demo) deployed"
       - "URL: http://{{ hostvars[groups['workers'][0]]['ansible_host'] }}:{{ positioning_demo_nodeport }}"
   delegate_to: "{{ groups['masters'][0] }}"
   run_once: true

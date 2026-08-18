@@ -1,19 +1,19 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: positioning-demo
+  name: location-app
   namespace: {{ demo_namespace }}
   labels:
-    app: positioning-demo
+    app: location-app
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: positioning-demo
+      app: location-app
   template:
     metadata:
       labels:
-        app: positioning-demo
+        app: location-app
       annotations:
         checksum/config: "{{ (lookup('template', role_path + '/templates/demo-config.yaml.j2') ~ lookup('template', role_path + '/templates/demo-nginx-configmap.yaml.j2')) | hash('sha256') }}"
     spec:
@@ -21,8 +21,8 @@ spec:
         kubernetes.io/hostname: worker
       terminationGracePeriodSeconds: 10
       containers:
-        - name: positioning-demo
-          image: {{ positioning_demo_image }}
+        - name: location-app
+          image: {{ location_app_image }}
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 80
@@ -32,7 +32,7 @@ spec:
           # from it. optional so a degraded pod still boots and serves /contract.
           envFrom:
             - configMapRef:
-                name: positioning-demo-config
+                name: location-app-config
                 optional: true
           readinessProbe:
             httpGet:
@@ -50,4 +50,4 @@ spec:
       volumes:
         - name: demo-nginx
           configMap:
-            name: positioning-demo-nginx
+            name: location-app-nginx

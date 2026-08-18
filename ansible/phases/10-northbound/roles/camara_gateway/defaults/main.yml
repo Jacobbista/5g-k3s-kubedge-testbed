@@ -4,7 +4,7 @@ camara_namespace: camara
 
 # Own release-tag env var (filtered CI); baseline tag from all.yml (northbound_image_tags).
 # See dashboard/backend/app/services/northbound_service.py.
-camara_gateway_image: "{{ northbound_image_registry }}/camara-gateway:{{ lookup('ansible.builtin.env', 'CAMARA_GATEWAY_TAG') | default(northbound_effective_tags['camara_gateway'] | default(northbound_image_tags.camara_gateway, true), true) }}"
+camara_gateway_image: "{{ northbound_image_registry }}/{{ northbound_image_names.camara_gateway }}:{{ lookup('ansible.builtin.env', 'CAMARA_GATEWAY_TAG') | default(northbound_effective_tags['camara_gateway'] | default(northbound_image_tags.camara_gateway, true), true) }}"
 camara_gateway_nodeport: 31920
 
 # Must match Phase 08/09. Read from env so a single CAMARA_CLIENT_SECRET /
@@ -41,10 +41,10 @@ camara_asset_store_file: "/app/data/assets.json"
 camara_asset_seed_file: "/app/config/assets.seed.json"
 camara_assets_pvc_size: "64Mi"
 
-# Optional: internal URL of the catalog wifi-positioning adapter. When set, the
-# gateway proxies GET /anchors/calibration so the demo reads real per-AP RF.
-# Empty (default) disables the extension; wifi-positioning is an opt-in catalog adapter.
-camara_wifi_positioning_url: "{{ lookup('ansible.builtin.env', 'WIFI_POSITIONING_URL') | default('', true) }}"
+# Optional: internal URL of the catalog wifi-adapter. When set, the gateway
+# proxies GET /anchors/calibration so the demo reads real per-AP RF.
+# Empty (default) disables the extension; wifi-adapter is an opt-in catalog adapter.
+camara_wifi_adapter_url: "{{ lookup('ansible.builtin.env', 'WIFI_ADAPTER_URL') | default('', true) }}"
 
 # External base URL the gateway advertises (OpenAPI `servers`, webhook callbacks,
 # redirect-uri allow lists at the operator IdP). Resolves in three steps: explicit
