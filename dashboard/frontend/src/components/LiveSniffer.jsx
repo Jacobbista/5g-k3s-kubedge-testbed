@@ -429,6 +429,26 @@ export default function LiveSniffer() {
 
   const currentPoint = points.find((p) => p.id === selectedPoint);
 
+  // Group the capture points so the MEC data network (n6m) is easy to find
+  // instead of buried in a flat list with the 5G core interfaces.
+  const isMec = (p) => (p.interface || "").includes("n6m") || p.id === "br-n6m";
+  const mecPoints = points.filter(isMec);
+  const corePoints = points.filter((p) => !isMec(p));
+
+  // One-click BPF filters for the selected point: the point's own default plus
+  // a couple of common ones on n6m, so the operator does not have to remember
+  // tcpdump syntax to isolate the video or the scans.
+  const presets = [{ label: "All traffic", value: "" }];
+  if (currentPoint?.default_filter) {
+    presets.push({ label: currentPoint.protocol || "default", value: currentPoint.default_filter });
+  }
+  if (currentPoint?.id === "br-n6m") {
+    presets.push(
+      { label: "RTP video", value: "udp port 5005" },
+      { label: "HTTP / scans", value: "tcp port 8080" },
+    );
+  }
+
   return (
     <div className="space-y-4">
       {/* Path Trace */}
@@ -590,26 +610,33 @@ export default function LiveSniffer() {
           )}
         </div>
 
-        <div className="flex items-end gap-3 mb-3">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
           <div className="flex-1">
             <label className="block text-[10px] text-slate-500 uppercase mb-1">
               Capture Point
             </label>
             <select
               value={selectedPoint}
-              onChange={(e) => setSelectedPoint(e.target.value)}
+              onChange={(e) => { setSelectedPoint(e.target.value); setCustomFilter(""); }}
               disabled={captureActive}
-              className="w-full rounded bg-slate-950 border border-slate-700 px-2 py-1.5 text-xs text-slate-200 focus:border-indigo-500 focus:outline-none"
+              className="w-full rounded bg-slate-950 border border-slate-700 px-2 py-1.5 text-xs text-slate-200 focus:border-indigo-500 focus:outline-none disabled:opacity-60"
             >
-              {points.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.label} — {p.interface}
-                </option>
-              ))}
+              {mecPoints.length > 0 && (
+                <optgroup label="MEC data network (n6m)">
+                  {mecPoints.map((p) => (
+                    <option key={p.id} value={p.id}>{p.label} — {p.interface}</option>
+                  ))}
+                </optgroup>
+              )}
+              <optgroup label="5G core data path">
+                {corePoints.map((p) => (
+                  <option key={p.id} value={p.id}>{p.label} — {p.interface}</option>
+                ))}
+              </optgroup>
             </select>
           </div>
 
-          <div className="w-48">
+          <div className="flex-1">
             <label className="block text-[10px] text-slate-500 uppercase mb-1">
               BPF Filter (optional)
             </label>
@@ -619,38 +646,67 @@ export default function LiveSniffer() {
               onChange={(e) => setCustomFilter(e.target.value)}
               disabled={captureActive}
               placeholder={currentPoint?.default_filter || "e.g. udp port 2152"}
-              className="w-full rounded bg-slate-950 border border-slate-700 px-2 py-1.5 text-xs text-slate-200 font-mono placeholder:text-slate-600 focus:border-indigo-500 focus:outline-none"
+              className="w-full rounded bg-slate-950 border border-slate-700 px-2 py-1.5 text-xs text-slate-200 font-mono placeholder:text-slate-600 focus:border-indigo-500 focus:outline-none disabled:opacity-60"
             />
           </div>
 
           {!captureActive ? (
             <button
               onClick={startCapture}
-              className="rounded bg-emerald-600 px-4 py-1.5 text-xs font-medium text-white hover:bg-emerald-500"
+              className="shrink-0 rounded bg-emerald-600 px-5 py-1.5 text-xs font-medium text-white hover:bg-emerald-500"
             >
               Start
             </button>
           ) : (
             <button
               onClick={stopCapture}
-              className="rounded bg-rose-600 px-4 py-1.5 text-xs font-medium text-white hover:bg-rose-500"
+              className="shrink-0 rounded bg-rose-600 px-5 py-1.5 text-xs font-medium text-white hover:bg-rose-500"
             >
               Stop
             </button>
           )}
         </div>
 
+        {/* Quick filters: fill the BPF box in one click so isolating the video
+            or the scans needs no tcpdump syntax. Disabled while capturing. */}
+        <div className="mt-2 flex flex-wrap items-center gap-1.5">
+          <span className="text-[10px] uppercase tracking-wide text-slate-600">quick filter</span>
+          {presets.map((f) => {
+            const active = customFilter === f.value;
+            return (
+              <button
+                key={f.label}
+                type="button"
+                disabled={captureActive}
+                onClick={() => setCustomFilter(f.value)}
+                className={`rounded px-2 py-0.5 text-[10px] font-medium transition-colors disabled:opacity-50 ${
+                  active
+                    ? "bg-indigo-600/30 text-indigo-200 ring-1 ring-indigo-500/50"
+                    : "bg-slate-800 text-slate-400 hover:bg-slate-700 hover:text-slate-200"
+                }`}
+              >
+                {f.label}
+              </button>
+            );
+          })}
+        </div>
+
         {currentPoint && (
-          <div className="text-[10px] text-slate-500 mb-2">
-            {currentPoint.description} — Protocol: {currentPoint.protocol}
+          <div className="mt-2 flex flex-wrap items-center gap-2 text-[10px] text-slate-500">
+            <span>{currentPoint.description}</span>
+            {currentPoint.protocol && (
+              <span className="rounded bg-slate-800 px-1.5 py-0.5 font-mono text-slate-400">{currentPoint.protocol}</span>
+            )}
           </div>
         )}
 
-        <TerminalOutput
-          lines={lines}
-          captureActive={captureActive}
-          noTrafficYet={noTrafficYet}
-        />
+        <div className="mt-3">
+          <TerminalOutput
+            lines={lines}
+            captureActive={captureActive}
+            noTrafficYet={noTrafficYet}
+          />
+        </div>
       </div>
     </div>
   );

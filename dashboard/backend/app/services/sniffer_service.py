@@ -66,6 +66,14 @@ CAPTURE_POINTS = {
         "default_filter": "",
         "protocol": "IP",
     },
+    "br-n6m": {
+        "label": "N6m Bridge (Worker)",
+        "description": "MEC data network: UE ↔ edge apps and push adapters (RTP video, WiFi scans, ...)",
+        "method": "ssh",
+        "interface": "br-n6m",
+        "default_filter": "",
+        "protocol": "IP",
+    },
     "br-n2": {
         "label": "N2 Bridge (Worker)",
         "description": "NGAP signaling (AMF ↔ gNB)",
