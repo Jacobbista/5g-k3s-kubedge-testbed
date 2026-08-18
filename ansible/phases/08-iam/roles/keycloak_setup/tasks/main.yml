@@ -462,6 +462,152 @@
   run_once: true
   when: northbound_enabled | bool
 
+# The realm JSON is imported on first boot only, so a client secret set (or
+# rotated) in .testbed.secrets after that never reaches Keycloak by itself.
+# Converge every confidential client here so the file stays the single source
+# and a re-run of this phase applies a rotation end to end. Each align is
+# skipped when its env var is unset (a run without the sourced secrets file can
+# never overwrite a real secret with a changeme-* default) and when the secret
+# already matches. See docs/security/iam.md "Secret rotation".
+- name: Align confidential client secrets with .testbed.secrets
+  ansible.builtin.include_tasks: align-client-secret.yml
+  vars:
+    _align_client_id: "{{ item.client }}"
+    _align_secret: "{{ item.secret }}"
+    _align_env_key: "{{ item.env }}"
+  loop:
+    - { client: dashboard-readonly, secret: "{{ dashboard_readonly_secret }}", env: DASHBOARD_READONLY_SECRET, northbound: false }
+    - { client: camara-gateway, secret: "{{ camara_client_secret }}", env: CAMARA_CLIENT_SECRET, northbound: true }
+    - { client: camara-api-demo, secret: "{{ camara_api_demo_secret }}", env: CAMARA_API_DEMO_SECRET, northbound: true }
+    - { client: placement-editor-proxy, secret: "{{ placement_editor_proxy_secret }}", env: PLACEMENT_EDITOR_PROXY_SECRET, northbound: true }
+  loop_control:
+    label: "{{ item.client }}"
+  when: (not item.northbound) or (northbound_enabled | bool)
+
+# The built-in account-console client ships with EMPTY webOrigins, so the
+# account console's login-status iframe rejects the public origin (403) and the
+# page renders blank behind the front door. Give it '+' (= the origins of its
+# own redirect URIs, not a wildcard), which is exactly what the working
+# security-admin-console client has. Both realms, idempotent.
+- name: Resolve account-console clients
+  ansible.builtin.uri:
+    url: "http://{{ hostvars[groups['workers'][0]]['ansible_host'] }}:{{ keycloak_nodeport }}{{ keycloak_path_prefix }}/admin/realms/{{ item }}/clients?clientId=account-console"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ _kc_admin_token.json.access_token }}"
+    return_content: true
+    status_code: 200
+  register: _kc_account_console
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+  loop:
+    - master
+    - "{{ keycloak_realm }}"
+
+- name: Allow the public origin on the account-console clients
+  ansible.builtin.uri:
+    url: "http://{{ hostvars[groups['workers'][0]]['ansible_host'] }}:{{ keycloak_nodeport }}{{ keycloak_path_prefix }}/admin/realms/{{ item.item }}/clients/{{ item.json[0].id }}"
+    method: PUT
+    headers:
+      Authorization: "Bearer {{ _kc_admin_token.json.access_token }}"
+    body_format: json
+    body: "{{ item.json[0] | combine({'webOrigins': ['+']}) }}"
+    status_code: 204
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+  loop: "{{ _kc_account_console.results }}"
+  loop_control:
+    label: "{{ item.item }}"
+  when:
+    - (item.json | default([])) | length > 0
+    - item.json[0].webOrigins != ['+']
+
+# Two of those secrets are also CONSUMED by running pods, which a Keycloak-side
+# align alone would break (pod still presenting the old secret). Converge them
+# here too, so "rotate = new value in the file + run this phase" holds with no
+# second command:
+#   - camara-gateway pod env CAMARA_CLIENT_SECRET (rendered by phase 10)
+#   - oauth2-proxy-placement Secret client-secret (rendered by phase 10)
+
+- name: Read camara-gateway deployment (secret sync)
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ kubeconfig_path }}"
+    kind: Deployment
+    name: camara-gateway
+    namespace: "{{ camara_namespace }}"
+  register: _gw_deploy
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+  when: northbound_enabled | bool
+
+- name: Sync camara-gateway pod env with the rotated secret
+  kubernetes.core.k8s:
+    kubeconfig: "{{ kubeconfig_path }}"
+    state: patched
+    kind: Deployment
+    name: camara-gateway
+    namespace: "{{ camara_namespace }}"
+    definition:
+      spec:
+        template:
+          spec:
+            containers:
+              - name: camara-gateway
+                env:
+                  - name: CAMARA_CLIENT_SECRET
+                    value: "{{ camara_client_secret }}"
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+  when:
+    - northbound_enabled | bool
+    - lookup('ansible.builtin.env', 'CAMARA_CLIENT_SECRET') | length > 0
+    - (_gw_deploy.resources | default([])) | length > 0
+    - >-
+      (_gw_deploy.resources[0].spec.template.spec.containers[0].env | default([])
+       | selectattr('name', 'equalto', 'CAMARA_CLIENT_SECRET') | map(attribute='value') | first | default(''))
+      != camara_client_secret
+
+- name: Read oauth2-proxy-placement secret (secret sync)
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ kubeconfig_path }}"
+    kind: Secret
+    name: oauth2-proxy-placement
+    namespace: "{{ positioning_namespace }}"
+  register: _gate_secret
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+  when: northbound_enabled | bool
+
+- name: Sync oauth2-proxy-placement client-secret with the rotated secret
+  kubernetes.core.k8s:
+    kubeconfig: "{{ kubeconfig_path }}"
+    state: patched
+    kind: Secret
+    name: oauth2-proxy-placement
+    namespace: "{{ positioning_namespace }}"
+    definition:
+      stringData:
+        client-secret: "{{ placement_editor_proxy_secret }}"
+  register: _gate_secret_sync
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+  when:
+    - northbound_enabled | bool
+    - lookup('ansible.builtin.env', 'PLACEMENT_EDITOR_PROXY_SECRET') | length > 0
+    - (_gate_secret.resources | default([])) | length > 0
+    - (_gate_secret.resources[0].data['client-secret'] | b64decode) != placement_editor_proxy_secret
+
+# A Secret change does not restart its consumer, so bounce oauth2-proxy only
+# when the secret actually moved (the env patch above restarts the gateway by
+# itself: pod template change = rollout).
+- name: Restart oauth2-proxy-placement to pick up the rotated secret
+  ansible.builtin.command:
+    cmd: k3s kubectl -n {{ positioning_namespace }} rollout restart deployment/oauth2-proxy-placement
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+  become: true
+  when: _gate_secret_sync is changed
+
 - name: Get camara-api-demo service account user
   ansible.builtin.uri:
     url: "http://{{ hostvars[groups['workers'][0]]['ansible_host'] }}:{{ keycloak_nodeport }}{{ keycloak_path_prefix }}/admin/realms/{{ keycloak_realm }}/clients/{{ _kc_consumer_demo_client2.json[0].id }}/service-account-user"

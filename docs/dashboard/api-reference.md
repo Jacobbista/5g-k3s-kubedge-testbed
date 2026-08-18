@@ -176,6 +176,18 @@ Node disk usage and the reclaim actions. Sizes are measured by walking the files
 
 ---
 
+## IAM
+
+Convenience endpoint behind the Identity & Access settings page. See [iam.md](../security/iam.md).
+
+| Method | Path | Auth | Description |
+|---|---|---|---|
+| GET | `/api/v1/iam/master-admin-password` | ✅ Admin | Reveal the Keycloak master admin password (read from `.testbed.secrets`). Read-only: this credential is automation-owned and auto-generated, surfaced only so an operator can sign in to the master console without opening the host file. Audit-logged |
+| GET | `/api/v1/iam/client-secret/{client_id}` | ✅ Admin | Reveal the client secret of a seeded M2M client (`camara-gateway`, `camara-api-demo`, `dashboard-readonly`), read from `.testbed.secrets` on the host. Admin-only despite being a GET; every reveal is audit-logged. Returns `found: false` when the key is not in the file (the realm then holds its changeme default) |
+| POST | `/api/v1/iam/client-secret/{client_id}/rotate` | ✅ Admin | Rotate that client's secret: generates a random value, writes `.testbed.secrets` first (the source of truth), then converges Keycloak; for `camara-gateway` also patches the gateway pod env and rolls it. Audit-logged; returns the new secret. On a half-failure the file already holds the new value and `kelt run-phase 08-iam` (or rotating again) converges Keycloak to it. See [iam.md](../security/iam.md) "Secret rotation" |
+
+---
+
 ## WebSocket Endpoints
 
 WebSocket connections are made to the same host on port 31880.

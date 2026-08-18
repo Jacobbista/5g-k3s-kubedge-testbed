@@ -41,6 +41,7 @@ from app.routers.storage import read_router as storage_read_router
 from app.routers.storage import write_router as storage_write_router
 from app.routers.selfupdate import read_router as selfupdate_read_router
 from app.routers.selfupdate import write_router as selfupdate_write_router
+from app.routers.iam import router as iam_router
 
 log = logging.getLogger(__name__)
 
@@ -146,6 +147,9 @@ app.include_router(apps_write_router, dependencies=_admin)
 app.include_router(branding_write_router, dependencies=_admin)
 # Dashboard self-update action: targeted rollout of a component (admin).
 app.include_router(selfupdate_write_router, dependencies=_admin)
+# IAM convenience: reveal a seeded M2M client secret (read from .testbed.secrets,
+# audit-logged). Admin-only even though it is a GET.
+app.include_router(iam_router, dependencies=_admin)
 
 
 @app.on_event("startup")

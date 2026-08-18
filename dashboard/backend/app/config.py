@@ -100,6 +100,10 @@ class Settings(BaseSettings):
     # Optional path prefix when Keycloak is served under a reverse proxy
     # (for example "/auth"). Leave empty for root-path deploys.
     keycloak_path_prefix: str = ""
+    # Keycloak master-realm admin username, used with KEYCLOAK_ADMIN_PASSWORD
+    # (read from .testbed.secrets) by the client-secret rotation endpoint.
+    # Mirrors keycloak_admin_user in phase 08.
+    keycloak_admin_user: str = "admin"
 
     def ensure_audit_dir(self) -> None:
         Path(self.audit_log_path).parent.mkdir(parents=True, exist_ok=True)

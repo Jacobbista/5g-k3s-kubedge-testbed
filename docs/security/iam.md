@@ -122,7 +122,9 @@ Routers assigned to the **admin-only** group:
 `subscribers` (records carry K and OPc), `nf` (image rollout via ansible),
 `ran` (mode switching reconfigures the data plane), `sniffer` (privileged
 packet capture), `exec_ws` (pod shell), `storage` (write router: every route
-deletes data from a node).
+deletes data from a node), `iam` (reveals and rotates seeded M2M client
+secrets via `.testbed.secrets`; admin-only even for the GET, and every reveal
+and rotation is audit-logged).
 
 Admin-only routes on viewer routers (each carries its own `require_admin`
 dependency, so a viewer gets 403 on them):
@@ -222,13 +224,19 @@ profile and drops undeclared ones, so phase 08 declares `org` in that profile
 (admin view and edit only) before assigning it. Service accounts are not
 subject to the profile, which is why the M2M path needed no such declaration.
 
-The `admin` password is `dashboard_bootstrap_admin_password` (resolved from
-`DASHBOARD_BOOTSTRAP_ADMIN_PASSWORD` or, when unset, `keycloak_admin_password`).
-`viewer` and `demo` do not reuse it: they default to `kelt-viewer` and
-`kelt-demo`, overridable with `DASHBOARD_BOOTSTRAP_VIEWER_PASSWORD` and
-`DASHBOARD_BOOTSTRAP_TENANT_PASSWORD`. Those two accounts are the ones handed
-out for a demo, while the operator password is often set to something short for
-convenience.
+These three are dashboard-login users in the `5g-testbed` realm, and they are a
+different thing from the Keycloak **master** admin. That master account
+(`keycloak_admin_user` / `KEYCLOAK_ADMIN_PASSWORD`, auto-generated into
+`.testbed.secrets`) bootstraps Keycloak and is what phase 08 and the dashboard's
+client-secret operations authenticate with; a human rarely logs in as it. The
+`admin`, `viewer`, and `demo` users below are what you log into the dashboard
+with.
+
+Each has its OWN throwaway bootstrap password, none inheriting the master
+password: `DASHBOARD_BOOTSTRAP_ADMIN_PASSWORD` (default `kelt-admin`),
+`DASHBOARD_BOOTSTRAP_VIEWER_PASSWORD` (default `kelt-viewer`), and
+`DASHBOARD_BOOTSTRAP_TENANT_PASSWORD` (default `kelt-demo`). They are seeds meant
+to be changed: `temporary: true` forces a reset at first login.
 
 Each seed account is created with `temporary: true`, which forces a password
 reset at first login. Phase 08 reruns never overwrite a password the operator
@@ -302,6 +310,42 @@ client libraries handle this automatically).
 
 Response includes `access_token` (JWT) with the configured realm role.
 Decode with `jwt.io` or `jose-jwt` to inspect `realm_access.roles`.
+
+## Secret rotation
+
+`.testbed.secrets` on the host is the single source of truth for every client
+secret. There are no `changeme-*` values in a normal deploy: `kelt` generates
+any missing key with a random value (in the onboarding wizard and again before
+`up` / `run-phase`), so the shipped ansible defaults are only ever reached by a
+hand-written `ansible-playbook` run without the sourced secrets file - and the
+phase-08 align tasks refuse to write a secret whose env var is unset, so such a
+run can never overwrite a real secret with a default.
+
+Rotation always follows the same order: the file first, then the phase-08 align
+tasks (or the dashboard endpoint, which performs the same converge) bring
+Keycloak and any consuming pod up to date. A failure half-way leaves "file new,
+Keycloak old", which the next align repairs - never an ambiguous split.
+
+Paths, by client:
+
+- **M2M clients** (`camara-gateway`, `camara-api-demo`, `dashboard-readonly`):
+  rotate from the dashboard (Settings → Identity & Access → client card →
+  rotate; admin-only, audit-logged, the new value is shown immediately), or set
+  a new value in `.testbed.secrets` and run `kelt run-phase 08-iam`. For
+  `camara-gateway` both paths also update the gateway pod env (the only pod
+  that presents its secret) and roll it.
+- **`placement-editor-proxy`**: provisioning-only, no dashboard button. New
+  value in `.testbed.secrets` (or `kelt secrets rotate`), then
+  `kelt run-phase 08-iam`: the phase aligns the Keycloak client, patches the
+  `oauth2-proxy-placement` Secret and restarts the proxy so both sides of the
+  auth-code exchange agree.
+- **`kelt secrets rotate`** regenerates every value in the file at once; apply
+  with `kelt run-phase 08-iam`.
+
+The old secret stops authenticating the moment Keycloak is updated.
+Already-issued access tokens stay valid until they expire (1h lifespan for the
+M2M clients in this realm); revoking those earlier requires the Keycloak admin
+console (client sessions).
 
 ## Realm idempotency and reconcile
 

@@ -5,78 +5,30 @@ import { KEYCLOAK_AUTHORITY } from "../auth/oidc";
 import { Link } from "react-router-dom";
 import { Collapsible } from "../components/ui";
 import { IconArrowLeft } from "../components/icons";
+import { getClientSecret, rotateClientSecret, getMasterAdminPassword } from "../api";
+import { useToast } from "../context/ToastContext";
+import { useConfirm } from "../context/ConfirmContext";
 
-// Conceptual background belongs to the docs site, not to this console: the page
-// states what THIS realm currently is and how to act on it, and links out for
-// the model. See docs/security/iam.md.
+// This console states what THIS realm currently is, plus the two operations the
+// dashboard actually owns (revealing and rotating M2M client secrets). The
+// conceptual model, the endpoint matrix and the tenancy design belong to the
+// docs site; user management belongs to the Keycloak console. Keep prose here
+// to one line per item: anything longer is documentation and goes to iam.md.
 const IAM_DOCS_URL = `${env("VITE_DOCS_URL", "https://jacobbista.github.io/kelt").replace(/\/+$/, "")}/security/iam/`;
 
-// Static cheat-sheet for the Keycloak realm provisioned by phase 08.
-// Read-only: every write action redirects the operator to the Keycloak
-// admin console. The dashboard intentionally does not proxy admin write
-// endpoints; defense in depth lives at the Keycloak layer.
-// See docs/security/iam.md for the full role / endpoint matrix.
-
-const ROLE_MATRIX = [
-  {
-    role: "dashboard-admin",
-    group: "g-dashboard-admins",
-    description: "Full read / write on the dashboard.",
-    abilities: [
-      "Read every dashboard page (overview, topology, metrics, logs, ...)",
-      "Restart backend, restart NFs, switch RAN mode",
-      "Open pod shells (exec)",
-      "Capture traffic (sniffer / pcap)",
-      "Manage subscribers (K / OPc visible)",
-      "Roll out NF images",
-      "Call the CAMARA Location API (composite inherits camara-location-read)",
-    ],
-  },
-  {
-    role: "dashboard-viewer",
-    group: "g-dashboard-viewers",
-    description: "Read-only operator view.",
-    abilities: [
-      "Read every dashboard page (GET endpoints)",
-      "Stream pod logs",
-    ],
-    restrictions: [
-      "Cannot restart, exec, sniff, or modify any resource",
-      "Cannot view subscriber K / OPc",
-      "Cannot call CAMARA endpoints (unless also placed in g-camara-users)",
-    ],
-  },
-  {
-    role: "camara-location-read",
-    group: "g-camara-users",
-    description: "Orthogonal role for the CAMARA Location API only.",
-    abilities: [
-      "Call POST /location-retrieval/v0.5/retrieve from the positioning demo",
-      "Call POST /location-verification/v3/verify",
-    ],
-    restrictions: [
-      "No access to the dashboard backend (the dashboard requires dashboard-viewer or dashboard-admin)",
-    ],
-  },
-  {
-    role: "positioning-edit",
-    group: "g-positioning-editors",
-    description: "Service-plane EDIT role for authoring room geometry.",
-    abilities: [
-      "Reach the placement-editor UI through its Keycloak front-door gate",
-    ],
-    restrictions: [
-      "No dashboard backend access (needs dashboard-viewer or dashboard-admin)",
-      "g-dashboard-admins also passes the placement-editor gate",
-    ],
-  },
+// Role model, one line per role: the full ability/endpoint matrix is iam.md's.
+const ROLES = [
+  { role: "dashboard-admin", group: "g-dashboard-admins", what: "Full dashboard read/write: exec, sniffer, subscribers, NF rollouts. Inherits camara-location-read." },
+  { role: "dashboard-viewer", group: "g-dashboard-viewers", what: "Read-only dashboard: every GET page and log streaming. No writes, no subscriber keys." },
+  { role: "camara-location-read", group: "g-camara-users", what: "CAMARA Location API only. No dashboard backend access on its own." },
+  { role: "positioning-edit", group: "g-positioning-editors", what: "Passes the placement-editor front-door gate (room geometry authoring). Nothing else." },
 ];
 
 const CLIENTS = [
   { id: "dashboard",           type: "public",       flow: "PKCE (browser)",            note: "Dashboard frontend (this app)." },
   { id: "positioning-demo",    type: "public",       flow: "PKCE (browser)",            note: "Positioning demo SPA." },
-  { id: "camara-gateway",      type: "confidential", flow: "client_credentials (M2M)",  note: "CAMARA Northbound gateway service account. No org attribute, so it sees every tenant." },
-  { id: "camara-api-demo",     type: "confidential", flow: "client_credentials (M2M)",  note: "Reference per-consumer CAMARA client. Its service account carries the org attribute, so its tokens are tenant-scoped." },
+  { id: "camara-gateway",      type: "confidential", flow: "client_credentials (M2M)",  note: "The gateway's own identity and the operator bypass: no org attribute, so its tokens see every tenant. API consumers never use this client.", tokenNote: "operator bypass: this token sees ALL tenants" },
+  { id: "camara-api-demo",     type: "confidential", flow: "client_credentials (M2M)",  note: "Reference per-consumer client: the terminal/script path for the CAMARA API. Its service account carries org, so tokens are tenant-scoped. Human users log in via browser only.", tokenNote: "tenant-scoped: this token only sees its own org's assets" },
   { id: "dashboard-readonly",  type: "confidential", flow: "client_credentials (M2M)",  note: "Headless read-only consumer (CI, monitoring agents)." },
   { id: "placement-editor-proxy", type: "confidential", flow: "authorization-code (oauth2-proxy)", note: "Front-door gate for the no-auth placement-editor; admits g-positioning-editors or g-dashboard-admins." },
 ];
@@ -89,8 +41,18 @@ const SEED_USERS = [
     groups: "g-camara-users + g-dashboard-viewers",
     role: "camara-location-read + dashboard-viewer",
     org: env("VITE_CAMARA_ORG", "demo"),
-    note: "Tenant. Sees only its own org's assets. Created when Northbound is on.",
+    note: "Tenant. Sees only its own org's assets. Browser login only; its terminal counterpart is the camara-api-demo client.",
   },
+];
+
+// The three clients whose secret the dashboard can rotate, with the one thing
+// the operator must know per client. placement-editor-proxy is deliberately
+// absent: it is infrastructure plumbing, rotated via .testbed.secrets + phase
+// 08 (see the note in the Credentials section).
+const ROTATABLE = [
+  { id: "camara-gateway", impact: "The gateway pod rolls to present the new secret; CAMARA calls keep working." },
+  { id: "camara-api-demo", impact: "Hand the new value to whatever calls the CAMARA API as this client." },
+  { id: "dashboard-readonly", impact: "Update any CI or monitoring consumer that uses this client." },
 ];
 
 function buildKeycloakAdminUrl() {
@@ -130,18 +92,35 @@ function buildRealmConsoleUrl(realmName) {
   }
 }
 
-function CurlSnippet({ clientId }) {
+// Token curl for an M2M client: copy, and optionally substitute the real
+// secret (fetched on click only; the reveal is audit-logged server-side).
+// Read-only helpers live here; rotation is a separate, heavier operation and
+// lives in the Credentials section at the bottom of the page.
+function CurlSnippet({ clientId, tokenNote }) {
   const realm = env("VITE_KEYCLOAK_REALM", "5g-testbed");
   const tokenUrl = useMemo(() => {
     if (!KEYCLOAK_AUTHORITY) return null;
     return `${KEYCLOAK_AUTHORITY.replace(/\/$/, "")}/protocol/openid-connect/token`;
   }, []);
   const [copied, setCopied] = useState(false);
+  const [secret, setSecret] = useState(null);
+  const [secretErr, setSecretErr] = useState("");
   if (!tokenUrl) return null;
+  const secretField = secret ? secret : "<paste-from-.testbed.secrets>";
   const snippet = `curl -s -X POST ${tokenUrl} \\
   --data-urlencode grant_type=client_credentials \\
   --data-urlencode client_id=${clientId} \\
-  --data-urlencode client_secret=<paste-from-.testbed.secrets>`;
+  --data-urlencode client_secret=${secretField}`;
+  const reveal = async () => {
+    setSecretErr("");
+    try {
+      const res = await getClientSecret(clientId);
+      if (res.found) setSecret(res.secret);
+      else setSecretErr(`${res.env_key} is not in .testbed.secrets on the host (realm has the changeme default)`);
+    } catch (e) {
+      setSecretErr(e?.message || "could not read the secret");
+    }
+  };
   const copy = async () => {
     try {
       await navigator.clipboard.writeText(snippet);
@@ -162,10 +141,170 @@ function CurlSnippet({ clientId }) {
       >
         {copied ? "copied" : "copy"}
       </button>
+      <button
+        type="button"
+        onClick={secret ? () => setSecret(null) : reveal}
+        className="ml-1 rounded bg-slate-800 px-2 py-0.5 text-[10px] text-slate-300 hover:bg-slate-700"
+      >
+        {secret ? "hide secret" : "insert secret"}
+      </button>
       <span className="ml-2 text-[10px] text-slate-500">
         realm = {realm}
       </span>
+      {secretErr && (
+        <span className="ml-2 text-[10px] text-amber-400">{secretErr}</span>
+      )}
+      {tokenNote && (
+        <span className={`ml-2 text-[10px] ${tokenNote.includes("ALL") ? "text-amber-400" : "text-slate-500"}`}>
+          {tokenNote}
+        </span>
+      )}
     </div>
+  );
+}
+
+// Danger zone: secret rotation, visually and structurally apart from the
+// copy-paste helpers above. One row per rotatable client; the fresh secret is
+// shown right in the row after a rotation, because handing it to the consumer
+// is the very next thing the operator does.
+// Read-only reveal of the Keycloak master admin password. Distinct from client
+// rotation: this credential is automation-owned (bootstrap + phase 08 + the
+// rotations above authenticate with it), auto-generated into .testbed.secrets,
+// and never edited by hand or changed from the UI. It is surfaced only so the
+// operator can read it to log into the master console without opening the file.
+function MasterAdminReveal() {
+  const [state, setState] = useState({ shown: false, username: "admin", secret: "", err: "" });
+  const [copied, setCopied] = useState(false);
+  const reveal = async () => {
+    try {
+      const res = await getMasterAdminPassword();
+      if (res.found) setState({ shown: true, username: res.username, secret: res.secret, err: "" });
+      else setState((s) => ({ ...s, err: "KEYCLOAK_ADMIN_PASSWORD is not in .testbed.secrets on the host" }));
+    } catch (e) {
+      setState((s) => ({ ...s, err: e?.message || "could not read the password" }));
+    }
+  };
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(state.secret);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      // manual selection fallback
+    }
+  };
+  return (
+    <div className="mt-3 rounded-lg border border-slate-800 bg-slate-950/40 p-3">
+      <div className="flex flex-wrap items-center gap-3 text-xs">
+        <span className="min-w-[170px] font-medium text-slate-200">Keycloak master admin</span>
+        <span className="flex-1 text-[11px] text-slate-400">
+          Automation-owned, auto-generated. Read-only: change it neither here nor by editing the file.
+          Shown so you can sign in to the master console.
+        </span>
+        {state.shown ? (
+          <span className="flex items-center gap-1.5 rounded bg-slate-950 px-2 py-1 font-mono text-[11px] text-slate-200">
+            {state.username} / {state.secret}
+            <button type="button" onClick={copy} className="rounded bg-slate-800 px-1.5 py-0.5 text-[10px] text-slate-300 hover:bg-slate-700">
+              {copied ? "copied" : "copy"}
+            </button>
+          </span>
+        ) : (
+          <button type="button" onClick={reveal} className="rounded bg-slate-800 px-3 py-1.5 text-[11px] font-medium text-slate-300 hover:bg-slate-700">
+            reveal password
+          </button>
+        )}
+      </div>
+      {state.err && <p className="mt-1.5 text-[10px] text-amber-400">{state.err}</p>}
+    </div>
+  );
+}
+
+function CredentialsPanel() {
+  const toast = useToast();
+  const confirm = useConfirm();
+  const [busy, setBusy] = useState("");
+  const [fresh, setFresh] = useState({}); // {clientId: newSecret}
+  const [copiedId, setCopiedId] = useState("");
+
+  const rotate = async (id) => {
+    const ok = await confirm({
+      title: `Rotate the ${id} secret?`,
+      body:
+        "A new random secret replaces the current one in .testbed.secrets and in Keycloak"
+        + (id === "camara-gateway" ? ", and the gateway pod rolls to present it" : "")
+        + ". The old secret stops working immediately; already-issued tokens stay valid until they expire (up to 1h).",
+      confirmLabel: "Rotate",
+      danger: true,
+    });
+    if (!ok) return;
+    setBusy(id);
+    try {
+      const res = await rotateClientSecret(id);
+      setFresh((f) => ({ ...f, [id]: res.secret }));
+      toast.success(`${id}: secret rotated${res.pod_synced ? " (gateway pod rolling)" : ""}`);
+    } catch (e) {
+      toast.error(`${id}: ${e?.message || "rotation failed"}`);
+    } finally {
+      setBusy("");
+    }
+  };
+
+  const copyFresh = async (id) => {
+    try {
+      await navigator.clipboard.writeText(fresh[id]);
+      setCopiedId(id);
+      setTimeout(() => setCopiedId(""), 1500);
+    } catch {
+      // Fall back to manual selection of the visible value.
+    }
+  };
+
+  return (
+    <section>
+      <h3 className="mb-2 text-sm font-semibold text-slate-200">Credentials</h3>
+      <div className="rounded-lg border border-amber-900/50 bg-amber-950/10 p-3">
+        <p className="mb-3 text-[11px] leading-relaxed text-slate-400">
+          Client secrets live in <span className="font-mono text-slate-300">.testbed.secrets</span> on the host,
+          the single source. Rotating generates a new random value, stores it there, applies it to Keycloak,
+          and (for the gateway) rolls the pod that presents it. Audit-logged.
+        </p>
+        <div className="flex flex-col divide-y divide-amber-900/30">
+          {ROTATABLE.map((c) => (
+            <div key={c.id} className="flex flex-wrap items-center gap-3 py-2.5 text-xs">
+              <span className="min-w-[170px] font-mono text-slate-200">{c.id}</span>
+              <span className="flex-1 text-[11px] text-slate-400">{c.impact}</span>
+              {fresh[c.id] && (
+                <span className="flex items-center gap-1.5 rounded bg-slate-950 px-2 py-1 font-mono text-[11px] text-emerald-300">
+                  {fresh[c.id]}
+                  <button
+                    type="button"
+                    onClick={() => copyFresh(c.id)}
+                    className="rounded bg-slate-800 px-1.5 py-0.5 text-[10px] text-slate-300 hover:bg-slate-700"
+                  >
+                    {copiedId === c.id ? "copied" : "copy"}
+                  </button>
+                </span>
+              )}
+              <button
+                type="button"
+                disabled={busy === c.id}
+                onClick={() => rotate(c.id)}
+                className="rounded bg-amber-600/20 px-3 py-1.5 text-[11px] font-medium text-amber-300 hover:bg-amber-600/30 disabled:opacity-50"
+              >
+                {busy === c.id ? "rotating…" : "rotate secret"}
+              </button>
+            </div>
+          ))}
+        </div>
+        <MasterAdminReveal />
+        <p className="mt-3 border-t border-amber-900/30 pt-2 text-[10px] text-slate-500">
+          Not here on purpose: <span className="font-mono">placement-editor-proxy</span> (infrastructure plumbing:
+          new value in the file, then <span className="font-mono">kelt run-phase 08-iam</span> converges Keycloak and
+          the oauth2-proxy) and dashboard-login user passwords (managed in Keycloak: admin / viewer / demo reset
+          their own).
+        </p>
+      </div>
+    </section>
   );
 }
 
@@ -185,8 +324,8 @@ export default function IamPage() {
         <div>
           <h2 className="text-lg font-semibold">Identity &amp; Access</h2>
           <p className="text-xs text-slate-400">
-            Read-only summary of the Keycloak realm provisioned by phase 08.
-            Every write action lives in the Keycloak admin console.
+            The Keycloak realm provisioned by phase 08. Users are managed in the Keycloak console;
+            M2M client credentials are managed here.
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -214,19 +353,17 @@ export default function IamPage() {
       </header>
 
       <section>
-        <h3 className="mb-2 text-sm font-semibold text-slate-200">Realm</h3>
         <div className="rounded-lg border border-slate-800 bg-slate-900/60 p-3 text-xs">
           <dl className="grid grid-cols-[max-content_1fr] gap-x-4 gap-y-1">
-            <dt className="text-slate-400">Name</dt>
+            <dt className="text-slate-400">Realm</dt>
             <dd className="font-mono text-slate-200">{realmName}</dd>
             <dt className="text-slate-400">Authority</dt>
             <dd className="font-mono break-all text-slate-200">{KEYCLOAK_AUTHORITY || "(not configured)"}</dd>
-            <dt className="text-slate-400">Issuer</dt>
-            <dd className="font-mono break-all text-slate-200">{KEYCLOAK_AUTHORITY || "(not configured)"}</dd>
-            <dt className="text-slate-400">Current user</dt>
-            <dd className="font-mono text-slate-200">{auth.username || "(none)"}</dd>
-            <dt className="text-slate-400">Current roles</dt>
-            <dd className="font-mono text-slate-200">{auth.roles.join(", ") || "(none)"}</dd>
+            <dt className="text-slate-400">Signed in as</dt>
+            <dd className="font-mono text-slate-200">
+              {auth.username || "(none)"}
+              <span className="ml-2 text-slate-500">{auth.roles.filter((r) => r.startsWith("dashboard") || r.startsWith("camara") || r.startsWith("positioning")).join(", ")}</span>
+            </dd>
             <dt className="text-slate-400">CAMARA tenant</dt>
             <dd className="font-mono text-slate-200">
               {auth.org
@@ -238,30 +375,33 @@ export default function IamPage() {
       </section>
 
       <section>
-        <h3 className="mb-2 text-sm font-semibold text-slate-200">Role model</h3>
-        <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-3">
-          {ROLE_MATRIX.map((entry) => (
-            <article key={entry.role} className="rounded-lg border border-slate-800 bg-slate-900/60 p-3 text-xs">
-              <div className="mb-1 flex items-center justify-between">
-                <span className="font-mono text-sm text-indigo-300">{entry.role}</span>
-                <span className="rounded bg-slate-800 px-1.5 py-0.5 font-mono text-[10px] text-slate-400">{entry.group}</span>
-              </div>
-              <p className="mb-2 text-slate-300">{entry.description}</p>
-              <p className="mb-1 text-[10px] uppercase tracking-wide text-emerald-400">Can</p>
-              <ul className="mb-2 list-disc space-y-0.5 pl-4 text-slate-300">
-                {entry.abilities.map((a) => <li key={a}>{a}</li>)}
-              </ul>
-              {entry.restrictions && (
-                <>
-                  <p className="mb-1 text-[10px] uppercase tracking-wide text-rose-400">Cannot</p>
-                  <ul className="list-disc space-y-0.5 pl-4 text-slate-300">
-                    {entry.restrictions.map((r) => <li key={r}>{r}</li>)}
-                  </ul>
-                </>
-              )}
-            </article>
-          ))}
+        <h3 className="mb-2 text-sm font-semibold text-slate-200">Roles and groups</h3>
+        <div className="overflow-x-auto rounded-lg border border-slate-800 bg-slate-900/60 p-3">
+          <table className="w-full text-xs">
+            <thead className="text-left text-slate-400">
+              <tr>
+                <th className="pb-1 pr-3">Role</th>
+                <th className="pb-1 pr-3">Granted by group</th>
+                <th className="pb-1">What it allows</th>
+              </tr>
+            </thead>
+            <tbody className="text-slate-200">
+              {ROLES.map((r) => (
+                <tr key={r.role} className="border-t border-slate-800 align-top">
+                  <td className="py-1.5 pr-3 font-mono text-indigo-300">{r.role}</td>
+                  <td className="py-1.5 pr-3 font-mono text-[11px]">{r.group}</td>
+                  <td className="py-1.5 text-slate-400">{r.what}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
+        <p className="mt-1.5 text-[11px] text-slate-500">
+          Full per-endpoint matrix and the tenancy model:{" "}
+          <a href={IAM_DOCS_URL} target="_blank" rel="noreferrer" className="text-sky-400 underline">
+            IAM documentation ↗
+          </a>
+        </p>
       </section>
 
       <section>
@@ -294,35 +434,36 @@ export default function IamPage() {
             </tbody>
           </table>
         </div>
-        <div className="mt-2 rounded border border-slate-800 bg-slate-950/50 p-2.5 text-[11px] text-slate-400">
-          <p className="mb-1 font-medium text-slate-300">Initial password</p>
-          <ul className="space-y-0.5">
-            <li>
-              <span className="font-mono text-slate-300">admin</span> — the operator password:{" "}
-              <span className="font-mono text-slate-300">KEYCLOAK_ADMIN_PASSWORD</span> from{" "}
-              <span className="font-mono text-slate-300">.testbed.secrets</span> on the host, never shown here.
-            </li>
-            <li>
-              <span className="font-mono text-slate-300">viewer</span> — default{" "}
-              <span className="font-mono text-slate-300">kelt-viewer</span>, override{" "}
-              <span className="font-mono text-slate-300">DASHBOARD_BOOTSTRAP_VIEWER_PASSWORD</span>.
-            </li>
-            <li>
-              <span className="font-mono text-slate-300">demo</span> — default{" "}
-              <span className="font-mono text-slate-300">kelt-demo</span>, override{" "}
-              <span className="font-mono text-slate-300">DASHBOARD_BOOTSTRAP_TENANT_PASSWORD</span>.
-            </li>
-          </ul>
-          <p className="mt-1">
-            The two demo accounts deliberately do not reuse the operator password, since they are the ones
-            handed out.
-          </p>
-          <p className="mt-1">
-            Each account is created with <span className="font-mono text-slate-300">temporary: true</span>, so the
-            first login forces a reset, and a phase 08 rerun never overwrites a password changed since.
-          </p>
+        <p className="mt-1.5 text-[11px] text-slate-500">
+          These are dashboard-login users in the <span className="font-mono">5g-testbed</span> realm, each with its own
+          throwaway bootstrap password (<span className="font-mono">DASHBOARD_BOOTSTRAP_ADMIN_PASSWORD</span> default{" "}
+          <span className="font-mono">kelt-admin</span>, <span className="font-mono">…VIEWER…</span> default{" "}
+          <span className="font-mono">kelt-viewer</span>, <span className="font-mono">…TENANT…</span> default{" "}
+          <span className="font-mono">kelt-demo</span>). They are NOT the Keycloak master admin
+          (<span className="font-mono">KEYCLOAK_ADMIN_PASSWORD</span>, auto-generated, used only by automation). Every
+          account forces a reset at first login; later changes are made in Keycloak and survive phase 08 reruns.
+        </p>
+      </section>
+
+      <section>
+        <h3 className="mb-2 text-sm font-semibold text-slate-200">OIDC clients</h3>
+        <div className="space-y-2">
+          {CLIENTS.map((c) => (
+            <div key={c.id} className="rounded-lg border border-slate-800 bg-slate-900/60 p-3 text-xs">
+              <div className="mb-1 flex items-center justify-between">
+                <span className="font-mono text-sm text-slate-100">{c.id}</span>
+                <span className="rounded bg-slate-800 px-1.5 py-0.5 font-mono text-[10px] text-slate-400">
+                  {c.type} · {c.flow}
+                </span>
+              </div>
+              <p className="text-slate-300">{c.note}</p>
+              {isAdmin && c.flow.startsWith("client_credentials") && <CurlSnippet clientId={c.id} tokenNote={c.tokenNote} />}
+            </div>
+          ))}
         </div>
       </section>
+
+      {isAdmin && <CredentialsPanel />}
 
       <section className="space-y-3">
         <h3 className="text-sm font-semibold text-slate-200">Guides</h3>
@@ -332,24 +473,9 @@ export default function IamPage() {
             <ol className="list-decimal space-y-1 pl-4">
               <li>Open the realm console (button at the top of this page) → <span className="font-mono text-slate-200">Users</span> → <span className="font-mono text-slate-200">Add user</span>.</li>
               <li><span className="font-mono text-slate-200">Credentials</span> tab → set a password, keep <span className="font-mono text-slate-200">Temporary</span> on.</li>
-              <li><span className="font-mono text-slate-200">Groups</span> tab → join one or more groups from the table below. The realm role follows the group.</li>
+              <li><span className="font-mono text-slate-200">Groups</span> tab → join one or more groups from the table above. The realm role follows the group.</li>
               <li>For a tenant user only: <span className="font-mono text-slate-200">Attributes</span> tab → add key <span className="font-mono text-slate-200">org</span> with the tenant value. Leaving it empty makes the user an operator that sees every tenant.</li>
             </ol>
-            <table className="w-full">
-              <tbody>
-                {[
-                  ["g-dashboard-admins", "Full control of the dashboard, and passes the placement-editor gate."],
-                  ["g-dashboard-viewers", "Read-only dashboard: every GET page plus log streaming."],
-                  ["g-camara-users", "CAMARA Location API and the positioning demo. No dashboard access on its own."],
-                  ["g-positioning-editors", "Authoring room geometry in the placement-editor."],
-                ].map(([g, what]) => (
-                  <tr key={g} className="border-t border-slate-800 align-top">
-                    <td className="w-52 py-1 pr-3 font-mono text-slate-200">{g}</td>
-                    <td className="py-1 text-slate-400">{what}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
             <p className="text-slate-400">
               Groups combine: demo plus a read-only core view is{" "}
               <span className="font-mono text-slate-200">g-camara-users</span> +{" "}
@@ -376,38 +502,13 @@ export default function IamPage() {
               roles, groups, and composites through the admin API, and leaves users, passwords, and sessions untouched.
             </p>
             <p className="text-slate-400">
-              <span className="font-mono text-slate-200">testbed run-phase 08-iam</span> asks before running it
+              <span className="font-mono text-slate-200">kelt run-phase 08-iam</span> asks before running it
               (with an option to persist the answer). Scripted:{" "}
-              <span className="font-mono text-slate-200">KEYCLOAK_REALM_RECONCILE=true testbed run-phase 08-iam</span>.
+              <span className="font-mono text-slate-200">KEYCLOAK_REALM_RECONCILE=true kelt run-phase 08-iam</span>.
             </p>
           </div>
         </Collapsible>
       </section>
-
-      <section>
-        <h3 className="mb-2 text-sm font-semibold text-slate-200">OIDC clients</h3>
-        <div className="space-y-2">
-          {CLIENTS.map((c) => (
-            <div key={c.id} className="rounded-lg border border-slate-800 bg-slate-900/60 p-3 text-xs">
-              <div className="mb-1 flex items-center justify-between">
-                <span className="font-mono text-sm text-slate-100">{c.id}</span>
-                <span className="rounded bg-slate-800 px-1.5 py-0.5 font-mono text-[10px] text-slate-400">
-                  {c.type} · {c.flow}
-                </span>
-              </div>
-              <p className="text-slate-300">{c.note}</p>
-              {isAdmin && c.flow.startsWith("client_credentials") && <CurlSnippet clientId={c.id} />}
-            </div>
-          ))}
-        </div>
-      </section>
-
-      <p className="text-[11px] text-slate-500">
-        Full role and endpoint matrix, and the tenancy model, in the{" "}
-        <a href={IAM_DOCS_URL} target="_blank" rel="noreferrer" className="text-sky-400 underline">
-          IAM documentation ↗
-        </a>.
-      </p>
     </div>
   );
 }

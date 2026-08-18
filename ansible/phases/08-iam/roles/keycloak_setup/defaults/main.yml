@@ -66,6 +66,12 @@ placement_editor_proxy_secret: "{{ lookup('ansible.builtin.env', 'PLACEMENT_EDIT
 # with browser login), demonstrating the gateway's org join. See docs/security/iam.md.
 camara_api_demo_secret: "{{ lookup('ansible.builtin.env', 'CAMARA_API_DEMO_SECRET') | default('changeme-consumer', true) }}"
 
+# Namespaces of the phase-10 workloads that CONSUME a client secret (gateway pod
+# env, oauth2-proxy Secret). Mirror the phase-10 role defaults; needed here so a
+# secret rotation applied by this phase can converge those consumers too.
+camara_namespace: camara
+positioning_namespace: positioning
+
 # ── Bootstrap end-users for dashboard login (realm 5g-testbed) ──────────────
 # Two seed accounts mirror the two-role model documented in docs/security/iam.md:
 #   admin  → group g-dashboard-admins  → realm role dashboard-admin
@@ -74,7 +80,13 @@ camara_api_demo_secret: "{{ lookup('ansible.builtin.env', 'CAMARA_API_DEMO_SECRE
 # login. Subsequent phase 08 runs do not overwrite a password changed via the
 # Keycloak UI; see docs/security/iam.md.
 dashboard_bootstrap_admin_username: "{{ lookup('ansible.builtin.env', 'DASHBOARD_BOOTSTRAP_ADMIN_USERNAME') | default('admin', true) }}"
-dashboard_bootstrap_admin_password: "{{ lookup('ansible.builtin.env', 'DASHBOARD_BOOTSTRAP_ADMIN_PASSWORD') | default(keycloak_admin_password, true) }}"
+# Its OWN throwaway default, NOT the Keycloak master admin password. These are
+# two different accounts in two different realms: the master admin (auto-generated
+# into .testbed.secrets, used only by automation) and this dashboard-login user
+# in the 5g-testbed realm. Sharing one value conflated them; keep them separate.
+# Like viewer/demo it is a weak seed that `temporary: true` forces the operator
+# to reset at first login. See docs/security/iam.md.
+dashboard_bootstrap_admin_password: "{{ lookup('ansible.builtin.env', 'DASHBOARD_BOOTSTRAP_ADMIN_PASSWORD') | default('kelt-admin', true) }}"
 dashboard_bootstrap_viewer_username: "{{ lookup('ansible.builtin.env', 'DASHBOARD_BOOTSTRAP_VIEWER_USERNAME') | default('viewer', true) }}"
 # Deliberately NOT the admin password: these demo accounts get handed out (a
 # colleague, a demo laptop, a screen recording), and the operator password is

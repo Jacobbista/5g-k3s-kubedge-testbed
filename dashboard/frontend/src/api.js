@@ -520,3 +520,13 @@ export const registryGarbageCollect = (dryRun = true) =>
 // Front-door co-branding (welcome page). GET viewer, PUT admin.
 export const getBranding = () => get("/api/v1/branding");
 export const setBranding = (body) => put("/api/v1/branding", body);
+
+// Reveal / rotate a seeded M2M client secret (admin-only, audit-logged
+// server-side). Rotate writes .testbed.secrets first, then converges Keycloak
+// (and the gateway pod for camara-gateway) to the file.
+export const getClientSecret = (clientId) =>
+  get(`/api/v1/iam/client-secret/${encodeURIComponent(clientId)}`);
+export const rotateClientSecret = (clientId) =>
+  post(`/api/v1/iam/client-secret/${encodeURIComponent(clientId)}/rotate`, {});
+// Read-only reveal of the Keycloak master admin password (automation-managed).
+export const getMasterAdminPassword = () => get("/api/v1/iam/master-admin-password");
