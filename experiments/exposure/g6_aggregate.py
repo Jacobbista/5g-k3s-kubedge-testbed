@@ -129,6 +129,9 @@ def main() -> int:
     vendor = "vendor"
     if "--vendor-service" in sys.argv:
         vendor = sys.argv[sys.argv.index("--vendor-service") + 1]
+    warmup = 0
+    if "--warmup" in sys.argv:
+        warmup = max(0, int(sys.argv[sys.argv.index("--warmup") + 1]))
     if not args:
         return print(__doc__) or 2
 
@@ -142,6 +145,20 @@ def main() -> int:
     traces: dict[str, list[dict]] = {}
     for h in hops:
         traces.setdefault(h["correlator"], []).append(h)
+
+    # Warmup discard: the first requests pay one-time costs (httpx connection-pool
+    # init, first DNS resolution, first JWKS fetch) that are not steady-state, so
+    # they inflate the earliest samples. Drop the N earliest traces (by first
+    # t_receive) and report the warm path. --warmup 0 (default) keeps everything.
+    if warmup > 0:
+        ordered = sorted(traces, key=lambda c: min(h["t_receive"] for h in traces[c]))
+        dropped = ordered[:warmup]
+        for c in dropped:
+            del traces[c]
+        print(f"warmup: dropped {len(dropped)} earliest trace(s)", file=sys.stderr)
+        if not traces:
+            print("no traces left after warmup discard (lower --warmup)", file=sys.stderr)
+            return 1
 
     out_dir = args[0] if os.path.isdir(args[0]) else "."
     csv_path = os.path.join(out_dir, "stages.csv")

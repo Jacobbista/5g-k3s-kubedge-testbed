@@ -58,6 +58,12 @@ it holds.)
   as the join key and snapshots the pod logs each run; feed those to
   `g6_aggregate.py <run-dir>`.
 
+The first requests pay one-time costs (httpx connection-pool init, first DNS
+resolution, first JWKS fetch) that are not steady-state, so report the **warm**
+path: run the campaign at volume (default 1000 at ~5/s), discard the earliest
+requests with `g6_aggregate.py <run-dir> --warmup N`, and read the median / p90 /
+p99 it prints, never a single early sample.
+
 No mock-vendor is deployed in the cluster. The **WAN-free number** is the full
 trace **minus the adapter→vendor span** (subtraction, no extra pod); the call to
 the real Wittra cloud is a genuine WAN round-trip, still measured but kept
