@@ -93,12 +93,13 @@ function AppInner() {
       auth.enabled
       && !auth.loading
       && !auth.user
+      && !auth.loggingOut
       && path !== "/auth/callback"
       && path !== "/logged-out"
     ) {
       auth.login();
     }
-  }, [auth.enabled, auth.loading, auth.user, auth.login]);
+  }, [auth.enabled, auth.loading, auth.user, auth.loggingOut, auth.login]);
 
   useEffect(() => {
     // Avoid firing while the auth context is still resolving an existing
@@ -157,7 +158,7 @@ function AppInner() {
   ) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-slate-950 text-slate-400">
-        Signing in…
+        {auth.loggingOut ? "Signing out…" : "Signing in…"}
       </div>
     );
   }

@@ -30,6 +30,13 @@ const AuthCtx = createContext(null);
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(AUTH_ENABLED);
+  // True from the moment logout starts until the browser leaves the page.
+  // removeUser() sets the user to null, which would otherwise trip the
+  // auto-login effect (App.jsx) and re-authenticate through the still-alive
+  // SSO session BEFORE we reach Keycloak's end-session endpoint, bouncing the
+  // user straight back to the dashboard via /auth/callback. This flag lets that
+  // effect stand down while a logout is in flight.
+  const [loggingOut, setLoggingOut] = useState(false);
 
   useEffect(() => {
     if (!AUTH_ENABLED) return;
@@ -89,28 +96,29 @@ export function AuthProvider({ children }) {
   const logout = useCallback(async () => {
     const um = getUserManager();
     if (!um) return;
+    // Set BEFORE removeUser so the user-is-null render that follows finds the
+    // guard already up and does not fire auto-login.
+    setLoggingOut(true);
     const idToken = user?.id_token;
     const clientId = env("VITE_KEYCLOAK_CLIENT_ID", "dashboard");
-    try {
-      await um.removeUser();
-    } catch {
-      // ignore: still proceed with SPA navigation
-    }
     // Hand the browser to Keycloak so the SSO session really ends, and let it
     // bring the user back to /logged-out. Without an id_token there is nothing to
     // prove the session with, so fall back to clearing this tab only.
     const back = `${window.location.origin}/logged-out`;
-    if (idToken) {
-      window.location.assign(buildEndSessionUrl(idToken, clientId, back));
-    } else {
-      window.location.assign("/logged-out");
+    const target = idToken ? buildEndSessionUrl(idToken, clientId, back) : `${window.location.origin}/logged-out`;
+    try {
+      await um.removeUser();
+    } catch {
+      // ignore: still proceed with the navigation below
     }
+    window.location.assign(target);
   }, [user]);
 
   const roles = extractRoles(user);
   const value = {
     enabled: AUTH_ENABLED,
     loading,
+    loggingOut,
     user,
     accessToken: user?.access_token || null,
     username: user?.profile?.preferred_username || user?.profile?.email || null,
