@@ -35,7 +35,14 @@ kubectl() {
     # shellcheck disable=SC2086
     $KELT_KUBECTL "$@"
   else
-    vagrant ssh master -c "sudo k3s kubectl $*" 2>/dev/null
+    # `vagrant ssh -c` takes ONE command string, so each argument is shell-escaped
+    # with %q and rebuilt: a bare "$*" would flatten quoting and break any jsonpath
+    # carrying quotes/spaces (e.g. node InternalIP, the image range). The login
+    # shell also prints the testbed banner ("[Testbed] Profile: ...") on stdout
+    # ahead of the output, so strip it or it contaminates every parsed value.
+    local remote="sudo k3s kubectl" a
+    for a in "$@"; do remote+=" $(printf '%q' "$a")"; done
+    vagrant ssh master -c "$remote" 2>/dev/null | sed '/^\[Testbed\]/d'
   fi
 }
 
