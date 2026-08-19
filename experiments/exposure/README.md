@@ -30,7 +30,7 @@ deployed and the live checks pass (e.g. a public identifier returns 422
 | G5 fidelity | recorded exchanges only | manual/recorded (see below) |
 | G5 source failure (`G5_failure.sh`) | no new instrumentation | runnable; uses `kubectl` to stop a vendor / drop an adapter |
 | G6 latency (`G6_latency.sh`) | driver + **aggregation** ours; per-hop logs theirs | driver records end-to-end + the `x-correlator` join key. northbound's per-hop logs ship in v0.9.0; the stage split is the **aggregation of those logs by `x-correlator`** via `g6_aggregate.py` (role split, below). |
-| G6 streaming | WS client, ≥10 min | skeleton pending: measure delivery lag vs the timestamp inside the estimate, plus achieved update rate |
+| C10 streaming (`G6_streaming.sh`) | WS client, ≥10 min | runnable skeleton: `stream_lag.py` measures freshness (fix->client) and update rate; see below |
 
 ## G5 fidelity (recorded, not a script)
 
@@ -74,3 +74,24 @@ the vendor-adapter repointed at the schema-driven mock-vendor via
 Cache is `maxAge`-aware: `maxAge=0` bypasses the cache and measures the real
 pipeline (the `fresh` condition); a cache hit is ~0 and reported as a separate
 trivial number. Measure the fresh path for pipeline latency.
+
+## C10 streaming (freshness, not push latency)
+
+`G6_streaming.sh [duration_s]` opens the CAMARA stream
+(`WS /positions/stream?token=<jwt>` on the gateway, over its NodePort) and runs
+`stream_lag.py` to record, per pushed position,
+
+    lag = client-receive-time  -  payload `timestamp`
+
+plus the update rate, over a long run (default 600 s). The `timestamp` is the
+source fix time passed through by the gateway verbatim, so the lag is **freshness
+fix->client** (fix age + fusion + cadence + network), a different measure from the
+retrieve hop-log — hence its own tool, not the aggregator. The flow comes from the
+**synthetic-adapter** walker (`demo-001`); wittra rides the same stream but is not
+the C10 source, so filter by the `source` column the client writes.
+
+Run on the cluster host so the receive clock is close to the fix clock. The
+`timestamp` is stamped inside the adapter's node VM; the VMs discipline that clock
+with chrony (observed RMS offset < 0.1 ms against NTP), so the host<->VM
+contribution to the lag is sub-millisecond. Each run snapshots `chronyc tracking`
+into `clock_sync.txt` as evidence of that bound.
