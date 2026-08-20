@@ -192,9 +192,10 @@ Configure `/etc/caddy/Caddyfile`:
 
 ```
 :8080 {
-    # Dashboard UI — React frontend on ansible VM
+    # Dashboard UI — baseline frontend is a worker pod (NodePort); the dev
+    # frontend on the ansible VM (192.168.56.13:31573) is the opt-in alternative
     handle_path /dashboard/* {
-        reverse_proxy 192.168.56.13:31573
+        reverse_proxy 192.168.56.11:31573
     }
     # Dashboard API — FastAPI backend on ansible VM
     handle_path /api/* {

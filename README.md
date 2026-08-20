@@ -64,12 +64,17 @@ graph LR
         end
         CC["KubeEdge CloudCore"]
         DB[("MongoDB")]
+        DashFE["Dashboard frontend (pod)"]
     end
 
     subgraph master["Master Node"]
         direction TB
         K3s["K3s Server"]
-        Dash["Dashboard"]
+    end
+
+    subgraph prov["Provisioning VM (ansible)"]
+        direction TB
+        Dash["Dashboard backend"]
     end
 
     UE <-->|N1| AMF
