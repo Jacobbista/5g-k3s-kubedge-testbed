@@ -77,7 +77,7 @@ The `Vagrantfile` controls:
 ### Scaling limits
 
 - **Single-host topology**: All VMs on the same physical machine, so inter-VM "network" is actually shared memory via VirtualBox virtual switch. Latency is sub-millisecond; throughput is limited by memory bandwidth, not NIC speed.
-- **VirtualBox kernel module**: Can conflict with other hypervisors (VMware, Hyper-V). On Linux, KVM is a better long-term choice.
+- **VirtualBox kernel module**: Loads an out-of-tree kernel module, so it is rebuilt against each new host kernel and cannot hold the CPU virtualisation extensions at the same time as another hypervisor (KVM, VMware, Hyper-V). On a Linux host a libvirt/KVM provider is the native alternative; see the [roadmap](../roadmap.md).
 - **Static IP assignment**: All node IPs are hardcoded in `ansible/group_vars/all.yml`. Adding a fourth compute node requires updating both the Vagrantfile and group_vars.
 
 ### Production path
